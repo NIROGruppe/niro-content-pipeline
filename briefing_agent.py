@@ -110,6 +110,102 @@ def _scrape_trends(industry: str, region: str = "DE", platforms: list = None) ->
     return results
 
 
+def _analyze_client_socials(social_handles: dict, max_posts: int = 10) -> dict:
+    """Scrapes the client's own social media channels via Apify to analyze what works."""
+    if not APIFY_API_TOKEN:
+        return {"error": "APIFY_API_TOKEN nicht konfiguriert"}
+
+    import requests as req
+    results = {}
+
+    # Instagram
+    ig_handle = social_handles.get("instagram", "").lstrip("@").strip()
+    if ig_handle:
+        try:
+            actor = "apify~instagram-profile-scraper"
+            run_url = f"https://api.apify.com/v2/acts/{actor}/runs?token={APIFY_API_TOKEN}&waitForFinish=90"
+            payload = {"usernames": [ig_handle], "resultsLimit": max_posts}
+            resp = req.post(run_url, json=payload, timeout=100)
+            if resp.status_code == 200:
+                dataset_id = resp.json().get("data", {}).get("defaultDatasetId")
+                if dataset_id:
+                    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_API_TOKEN}&limit={max_posts}"
+                    items = req.get(items_url, timeout=30).json()
+                    posts = []
+                    for item in items[:max_posts]:
+                        posts.append({
+                            "type": item.get("type", ""),
+                            "caption": (item.get("caption", "") or "")[:300],
+                            "likes": item.get("likesCount", 0),
+                            "comments": item.get("commentsCount", 0),
+                            "views": item.get("videoViewCount", 0),
+                            "timestamp": item.get("timestamp", ""),
+                            "hashtags": item.get("hashtags", []),
+                            "url": item.get("url", ""),
+                        })
+                    # Sort by engagement
+                    posts.sort(key=lambda x: x["likes"] + x["comments"], reverse=True)
+                    results["instagram"] = {
+                        "handle": ig_handle,
+                        "posts_analyzed": len(posts),
+                        "posts": posts,
+                        "top_hashtags": _extract_top_hashtags(posts),
+                        "avg_likes": round(sum(p["likes"] for p in posts) / max(len(posts), 1)),
+                        "avg_comments": round(sum(p["comments"] for p in posts) / max(len(posts), 1)),
+                    }
+        except Exception as e:
+            results["instagram_error"] = str(e)
+
+    # TikTok
+    tt_handle = social_handles.get("tiktok", "").lstrip("@").strip()
+    if tt_handle:
+        try:
+            actor = "clockworks~tiktok-scraper"
+            run_url = f"https://api.apify.com/v2/acts/{actor}/runs?token={APIFY_API_TOKEN}&waitForFinish=90"
+            payload = {"profiles": [tt_handle], "resultsPerPage": max_posts}
+            resp = req.post(run_url, json=payload, timeout=100)
+            if resp.status_code == 200:
+                dataset_id = resp.json().get("data", {}).get("defaultDatasetId")
+                if dataset_id:
+                    items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?token={APIFY_API_TOKEN}&limit={max_posts}"
+                    items = req.get(items_url, timeout=30).json()
+                    posts = []
+                    for item in items[:max_posts]:
+                        posts.append({
+                            "caption": (item.get("text", "") or "")[:300],
+                            "views": item.get("playCount", 0),
+                            "likes": item.get("diggCount", 0),
+                            "comments": item.get("commentCount", 0),
+                            "shares": item.get("shareCount", 0),
+                            "url": item.get("webVideoUrl", ""),
+                        })
+                    posts.sort(key=lambda x: x["views"], reverse=True)
+                    results["tiktok"] = {
+                        "handle": tt_handle,
+                        "posts_analyzed": len(posts),
+                        "posts": posts,
+                        "avg_views": round(sum(p["views"] for p in posts) / max(len(posts), 1)),
+                        "avg_likes": round(sum(p["likes"] for p in posts) / max(len(posts), 1)),
+                    }
+        except Exception as e:
+            results["tiktok_error"] = str(e)
+
+    if not results:
+        return {"error": "Keine Social-Media-Handles im Kundenprofil hinterlegt"}
+
+    return results
+
+
+def _extract_top_hashtags(posts: list, top_n: int = 10) -> list:
+    """Extracts most-used hashtags from posts."""
+    counts = {}
+    for p in posts:
+        for tag in p.get("hashtags", []):
+            tag = tag.lower().lstrip("#")
+            counts[tag] = counts.get(tag, 0) + 1
+    return sorted(counts, key=counts.get, reverse=True)[:top_n]
+
+
 def _get_posting_history(profile_slug: str, limit: int = 50) -> list:
     """Gets recent postings from Supabase for duplicate detection."""
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -171,6 +267,25 @@ def _save_briefing(briefing: dict, profile_slug: str) -> dict:
 # ─── TOOL DEFINITIONS FOR CLAUDE ─────────────────────────────────────────────
 
 TOOLS = [
+    {
+        "name": "analyze_client_socials",
+        "description": "Analysiert die eigenen Social-Media-Kanäle des Kunden (Instagram, TikTok). Scrapt die letzten Posts und liefert Engagement-Daten (Likes, Views, Comments), Top-Hashtags und die best-performenden Inhalte. Nutze diese Daten um zu verstehen welcher Content beim Kunden funktioniert.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "social_handles": {
+                    "type": "object",
+                    "description": "Social-Media-Handles des Kunden, z.B. {\"instagram\": \"@handle\", \"tiktok\": \"@handle\"}",
+                },
+                "max_posts": {
+                    "type": "integer",
+                    "description": "Maximale Anzahl Posts pro Plattform zum Analysieren (Default: 10)",
+                    "default": 10,
+                },
+            },
+            "required": ["social_handles"],
+        },
+    },
     {
         "name": "scrape_trends",
         "description": "Recherchiert aktuelle Trends und News für eine Branche. Nutzt Tavily (News), Google Trends und optional Apify (Social Media). Gibt strukturierte Trend-Daten zurück.",
@@ -234,7 +349,12 @@ TOOLS = [
 
 def execute_tool(name: str, input_data: dict) -> str:
     """Executes a tool by name and returns the JSON result."""
-    if name == "scrape_trends":
+    if name == "analyze_client_socials":
+        result = _analyze_client_socials(
+            social_handles=input_data["social_handles"],
+            max_posts=input_data.get("max_posts", 10),
+        )
+    elif name == "scrape_trends":
         result = _scrape_trends(
             industry=input_data["industry"],
             region=input_data.get("region", "DE"),
@@ -327,11 +447,12 @@ KUNDENPROFIL:
 ZIELPLATTFORMEN: {platforms_str}
 
 VORGEHEN:
-1. Nutze scrape_trends um aktuelle Trends in der Branche "{profile.get('industry', '')}" zu recherchieren
-2. Nutze get_posting_history um bisherige Postings zu laden und Duplikate zu vermeiden
-3. Für jeden Briefing-Entwurf: Nutze check_duplicate um sicherzustellen, dass der Titel einzigartig ist
-4. Generiere {num_briefings} Briefings basierend auf den gefundenen Trends
-5. Speichere jedes Briefing mit save_briefing
+1. Nutze analyze_client_socials um die bestehenden Social-Media-Kanäle des Kunden zu analysieren (was funktioniert, Engagement, Top-Hashtags, Content-Stil)
+2. Nutze scrape_trends um aktuelle Trends in der Branche "{profile.get('industry', '')}" zu recherchieren
+3. Nutze get_posting_history um bisherige Postings zu laden und Duplikate zu vermeiden
+4. Für jeden Briefing-Entwurf: Nutze check_duplicate um sicherzustellen, dass der Titel einzigartig ist
+5. Generiere {num_briefings} Briefings basierend auf den gefundenen Trends UND den Erkenntnissen aus der Kanal-Analyse
+6. Speichere jedes Briefing mit save_briefing
 
 BRIEFING FORMAT (jedes Briefing muss ALLE diese Felder haben):
 - titel: Arbeitstitel des Posts (kurz, prägnant)
@@ -354,7 +475,8 @@ WICHTIG:
 - Hooks müssen scroll-stopping sein
 - Captions müssen ready-to-post sein
 - Passe Tonalität und Stil an die Kundenmarke an
-- Vermeide Duplikate zu bestehenden Postings"""
+- Vermeide Duplikate zu bestehenden Postings
+- Nutze die Erkenntnisse aus der Kanal-Analyse: Welche Formate funktionieren? Welche Hashtags performen? Wie hoch ist das durchschnittliche Engagement? Baue auf den Stärken des Kanals auf."""
 
     messages = [
         {
