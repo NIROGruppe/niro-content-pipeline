@@ -268,6 +268,7 @@ def run_briefing_agent(
     num_briefings: int = 5,
     focus: str = "",
     platforms: list = None,
+    language: str = "Deutsch",
     on_status=None,
 ) -> list:
     """
@@ -300,7 +301,15 @@ def run_briefing_agent(
 
     focus_section = f"\nSPEZIALFOKUS: {focus}\n" if focus else ""
 
+    lang_instruction = (
+        "SPRACHE: Alle Briefings, Hooks, Captions, Hashtags und Beschreibungen MÜSSEN auf Deutsch verfasst werden."
+        if language == "Deutsch"
+        else "LANGUAGE: All briefings, hooks, captions, hashtags and descriptions MUST be written in English."
+    )
+
     system_prompt = f"""Du bist ein erfahrener Social Media Strategist und Content-Berater für die Agentur NIRO Media.
+
+{lang_instruction}
 Deine Aufgabe: Erstelle {num_briefings} einzigartige, trendbasierte Content-Briefings für den Kunden.
 
 KUNDENPROFIL:

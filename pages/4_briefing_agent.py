@@ -63,6 +63,7 @@ with col_left:
     num_briefings = st.number_input("Anzahl Briefings", min_value=1, max_value=20, value=5, step=1)
     platform_options = ["TikTok", "Instagram Reel", "Instagram Post", "YouTube", "LinkedIn"]
     selected_platforms = st.multiselect("Zielplattformen", platform_options, default=["TikTok", "Instagram Reel"])
+    language = st.selectbox("🌐 Sprache", ["Deutsch", "Englisch"], index=0)
 
 with col_right:
     focus = st.text_area(
@@ -99,6 +100,7 @@ if st.button("📋 Briefings generieren", use_container_width=True, type="primar
                     num_briefings=num_briefings,
                     focus=focus,
                     platforms=selected_platforms,
+                    language=language,
                     on_status=on_status,
                 )
                 st.session_state["briefing_generating"] = False
