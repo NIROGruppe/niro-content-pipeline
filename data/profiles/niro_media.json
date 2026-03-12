@@ -1,0 +1,35 @@
+{
+  "slug": "niro_media",
+  "name": "NIRO Media",
+  "industry": "",
+  "slogan": "",
+  "website": "",
+  "target_audience": "",
+  "tone": "Du (locker)",
+  "values": "",
+  "language": "Englisch",
+  "colors": [
+    {
+      "name": "Primär",
+      "hex": "#A2C73D"
+    },
+    {
+      "name": "Sekundär",
+      "hex": "#85CFF4"
+    },
+    {
+      "name": "Akzent",
+      "hex": "#1A211D"
+    }
+  ],
+  "font": "",
+  "logo": "",
+  "social": {
+    "instagram": "",
+    "tiktok": "",
+    "linkedin": "",
+    "youtube": ""
+  },
+  "notes": "Hauptfarben sind Grün (#A2C73D) und Blau (#85CFF4). Unterstützende Farben (z. B. #CCEAFC, #E1EDD0, #B3CF61) sollen nicht dominieren und nur akzentartig eingesetzt werden. Korrekte Farbverwendung ist laut Guideline markenkritisch. Primärfarben sollen in größeren und/oder prominenten Bereichen eingesetzt werden.",
+  "created_at": "2026-03-11 16:56"
+}

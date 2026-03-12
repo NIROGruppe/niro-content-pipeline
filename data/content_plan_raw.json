@@ -1,0 +1,79 @@
+[
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Montag",
+    "topic": "Ein Tag als Pflegekraft bei uns",
+    "platform": ["TikTok", "Instagram Reel"],
+    "format": "Day-in-the-Life",
+    "hook": "5:45 Uhr. Noch bevor die Stadt aufwacht, starten wir – und das gerne.",
+    "caption": "Frühschicht, Lächeln, Teamwork. So sieht ein echter Tag bei uns aus – keine Hochglanz-Werbung, sondern Realität. Und genau das macht uns aus.\n\n#Pflege #Pflegekraft #DayInTheLife #Recruiting #Seniorenheim #PflegeJob",
+    "best_time": "12:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Dienstag",
+    "topic": "Mitarbeiterin erzählt: Warum ich in der Pflege geblieben bin",
+    "platform": ["Instagram Reel", "TikTok"],
+    "format": "Testimonial / Interview",
+    "hook": "Ich wollte kündigen. Dann kam ich hierher.",
+    "caption": "Lisa arbeitet seit 3 Jahren bei uns. Sie erzählt ehrlich, warum sie geblieben ist – und was dieses Haus anders macht.\n\n#PflegeJob #Testimonial #Pflegekräfte #EchteGeschichten #Recruiting",
+    "best_time": "17:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Mittwoch",
+    "topic": "5 Benefits, die du bei uns bekommst",
+    "platform": ["TikTok", "Instagram Reel"],
+    "format": "Listicle / Text-Overlay",
+    "hook": "Pflege heißt schlecht bezahlt? Nicht bei uns.",
+    "caption": "Übertarifliche Bezahlung, flexible Dienstpläne, kostenlose Weiterbildung, Wunschfrei-Garantie, Team-Events. Klingt gut? Bewirb dich jetzt – Link in Bio.\n\n#PflegeJob #Benefits #Recruiting #Pflegekräfte #JobInDerPflege",
+    "best_time": "12:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Donnerstag",
+    "topic": "Die Bewohner sagen Danke",
+    "platform": ["Instagram Reel", "TikTok"],
+    "format": "Emotionaler Clip",
+    "hook": "Für diesen Moment lohnt sich alles.",
+    "caption": "Unsere Bewohner wissen, was unser Team jeden Tag leistet. Dieses Video zeigt, warum Pflege mehr ist als ein Job – es ist Berufung.\n\n#Pflege #Wertschätzung #Seniorenheim #Dankbarkeit #PflegeHerz",
+    "best_time": "18:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Freitag",
+    "topic": "Behind the Scenes: Unser Pausenraum",
+    "platform": ["TikTok", "Instagram Reel"],
+    "format": "Behind the Scenes",
+    "hook": "Der wichtigste Raum im Haus? Nicht die Station – der Pausenraum.",
+    "caption": "Wer gut pflegen will, muss auch gut pausieren. Bei uns gibt es echte Pausen, echten Kaffee und ein Team, das zusammenhält.\n\n#BehindTheScenes #Teamkultur #PflegeJob #Pausenraum #Recruiting",
+    "best_time": "11:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Samstag",
+    "topic": "Bewerbungsprozess in 60 Sekunden erklärt",
+    "platform": ["TikTok", "Instagram Reel"],
+    "format": "Explainer / Screen-Recording",
+    "hook": "Von der Bewerbung zum Vertrag – so schnell geht das bei uns.",
+    "caption": "Kein Papierkram-Marathon. Bewerbung schicken, Kennenlerngespräch, Hospitationstag, Vertrag. Innerhalb von 2 Wochen weißt du Bescheid.\n\n#Bewerbung #PflegeJob #SchnellBewerben #Recruiting #Pflegekräfte",
+    "best_time": "10:00"
+  },
+  {
+    "week": 1,
+    "week_theme": "Recruiting Pflegekräfte – Einblicke & Wertschätzung",
+    "day": "Sonntag",
+    "topic": "PDL spricht Klartext: Was wir wirklich suchen",
+    "platform": ["Instagram Reel", "TikTok"],
+    "format": "Talking Head",
+    "hook": "Wir suchen keine perfekten Lebensläufe. Wir suchen Menschen mit Herz.",
+    "caption": "Unsere Pflegedienstleitung sagt ehrlich, worauf es ankommt – und worauf nicht. Quereinsteiger willkommen, Menschlichkeit zählt mehr als Noten.\n\n#Klartext #PDL #Recruiting #Pflege #Quereinsteiger #PflegeJob",
+    "best_time": "19:00"
+  }
+]

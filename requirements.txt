@@ -1,0 +1,11 @@
+streamlit
+requests
+httpx
+python-dotenv
+watchdog
+pdfplumber
+higgsfield-client
+anthropic
+tavily-python
+pytrends
+supabase

@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+outputs/
+data/profiles/logos/
+.DS_Store
