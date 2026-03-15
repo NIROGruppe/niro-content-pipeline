@@ -31,10 +31,10 @@ REDDIT_USER_AGENT = _secret("REDDIT_USER_AGENT", "TradingBot/1.0")
 
 DEFAULTS = {
     # Scan Agent
-    "min_liquidity": 10000,          # Min liquidity in $
-    "min_volume_24h": 1000,          # Min 24h volume in $
+    "min_liquidity": 1000,           # Min liquidity in $
+    "min_volume_24h": 100,           # Min 24h volume in $
     "min_time_to_resolution_hours": 1,
-    "max_time_to_resolution_days": 7,
+    "max_time_to_resolution_days": 30,
     "price_move_threshold": 0.05,    # 5% move = flag
     "spread_threshold": 0.03,        # 3% spread = flag
 

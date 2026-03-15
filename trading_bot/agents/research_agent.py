@@ -28,7 +28,7 @@ def research_market(market: dict) -> dict:
         reddit_future = executor.submit(
             search_reddit, keywords, 15, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
         )
-        rss_future = executor.submit(search_rss, keywords, 10)
+        rss_future = executor.submit(search_rss, keywords, None, 10)
 
         sources.extend(twitter_future.result())
         sources.extend(reddit_future.result())

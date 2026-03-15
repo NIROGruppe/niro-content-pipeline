@@ -3,7 +3,7 @@ Polymarket API wrapper — fetches markets, prices, and places trades.
 Falls back to Manifold Markets if Polymarket is unavailable.
 """
 import requests
-import time
+import json
 from datetime import datetime, timedelta
 
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
@@ -20,7 +20,6 @@ def fetch_polymarket_markets(
     """Fetch active markets from Polymarket Gamma API."""
     markets = []
     try:
-        # Fetch events with active markets
         resp = requests.get(
             f"{POLYMARKET_GAMMA_URL}/markets",
             params={
@@ -37,9 +36,10 @@ def fetch_polymarket_markets(
         now = datetime.utcnow()
         for m in raw_markets:
             try:
-                liquidity = float(m.get("liquidityNum", 0) or 0)
-                volume_24h = float(m.get("volume24hr", 0) or 0)
-                end_date_str = m.get("endDate") or m.get("end_date_iso", "")
+                # Field names from actual API response
+                liquidity = float(m.get("liquidity", 0) or 0)
+                volume_24h = float(m.get("volume24hr", m.get("volume", 0)) or 0)
+                end_date_str = m.get("endDate", "")
 
                 # Parse end date
                 end_date = None
@@ -51,8 +51,7 @@ def fetch_polymarket_markets(
 
                 # Time to resolution filter
                 if end_date:
-                    time_to_end = end_date - now
-                    hours_to_end = time_to_end.total_seconds() / 3600
+                    hours_to_end = (end_date - now).total_seconds() / 3600
                     if hours_to_end < min_hours or hours_to_end > max_days * 24:
                         continue
 
@@ -60,18 +59,31 @@ def fetch_polymarket_markets(
                 if liquidity < min_liquidity or volume_24h < min_volume:
                     continue
 
-                # Extract prices
-                price_yes = float(m.get("outcomePrices", "[0.5]").strip("[]").split(",")[0]) if isinstance(m.get("outcomePrices"), str) else 0.5
+                # Parse outcomePrices — can be string '["0.5","0.5"]' or list
+                price_yes = 0.5
+                outcome_prices = m.get("outcomePrices", "")
+                if isinstance(outcome_prices, str) and outcome_prices:
+                    try:
+                        parsed = json.loads(outcome_prices)
+                        if isinstance(parsed, list) and parsed:
+                            price_yes = float(parsed[0])
+                    except Exception:
+                        pass
+                elif isinstance(outcome_prices, list) and outcome_prices:
+                    price_yes = float(outcome_prices[0])
+
                 price_no = 1.0 - price_yes
                 spread = abs(price_yes - price_no)
 
                 # Determine flag reasons
                 flags = []
-                price_change = float(m.get("volumeNum", 0) or 0)  # Approximation
                 if spread > 0.03:
                     flags.append(f"Wide spread ({spread:.1%})")
                 if volume_24h > min_volume * 5:
                     flags.append(f"High volume (${volume_24h:,.0f})")
+                # Flag extreme prices as potential opportunities
+                if 0.05 < price_yes < 0.30 or 0.70 < price_yes < 0.95:
+                    flags.append(f"Strong lean ({price_yes:.0%} YES)")
 
                 markets.append({
                     "id": str(m.get("id", m.get("conditionId", ""))),
@@ -94,8 +106,12 @@ def fetch_polymarket_markets(
 
     except Exception as e:
         print(f"[Polymarket] Error: {e}")
-        # Fallback to Manifold
         markets = fetch_manifold_markets(min_liquidity, min_volume, min_hours, max_days)
+
+    # If Polymarket returned nothing useful, also try Manifold
+    if not markets:
+        manifold = fetch_manifold_markets(min_liquidity, min_volume, min_hours, max_days)
+        markets.extend(manifold)
 
     return markets
 
@@ -110,8 +126,8 @@ def fetch_manifold_markets(
     markets = []
     try:
         resp = requests.get(
-            f"{MANIFOLD_API_URL}/markets",
-            params={"limit": 200, "sort": "liquidity"},
+            f"{MANIFOLD_API_URL}/search-markets",
+            params={"limit": 100, "sort": "liquidity", "filter": "open"},
             timeout=30,
         )
         resp.raise_for_status()
@@ -122,20 +138,28 @@ def fetch_manifold_markets(
             if m.get("isResolved") or not m.get("closeTime"):
                 continue
 
-            liquidity = float(m.get("totalLiquidity", 0))
-            volume = float(m.get("volume", 0))
-            close_time = datetime.fromtimestamp(m["closeTime"] / 1000)
-            hours_to_end = (close_time - now).total_seconds() / 3600
+            liquidity = float(m.get("totalLiquidity", 0) or 0)
+            volume = float(m.get("volume", 0) or 0)
 
+            try:
+                close_time = datetime.fromtimestamp(m["closeTime"] / 1000)
+            except Exception:
+                continue
+
+            hours_to_end = (close_time - now).total_seconds() / 3600
             if hours_to_end < min_hours or hours_to_end > max_days * 24:
                 continue
-            if liquidity < min_liquidity * 0.1 or volume < min_volume * 0.1:
+
+            # Use lower thresholds for Manifold (smaller market)
+            if liquidity < min_liquidity * 0.01 or volume < min_volume * 0.01:
                 continue
 
-            prob = float(m.get("probability", 0.5))
+            prob = float(m.get("probability", 0.5) or 0.5)
             flags = []
-            if volume > min_volume:
-                flags.append("High volume")
+            if volume > 1000:
+                flags.append(f"Volume ${volume:,.0f}")
+            if 0.10 < prob < 0.35 or 0.65 < prob < 0.90:
+                flags.append(f"Strong lean ({prob:.0%} YES)")
 
             markets.append({
                 "id": m.get("id", ""),
@@ -147,7 +171,7 @@ def fetch_manifold_markets(
                 "price_no": 1 - prob,
                 "spread": 0,
                 "end_date": close_time.isoformat(),
-                "category": m.get("groupSlugs", [""])[0] if m.get("groupSlugs") else "",
+                "category": "",
                 "flagged_reason": " | ".join(flags),
                 "price_change_1h": 0,
                 "status": "active",
@@ -166,7 +190,15 @@ def get_market_price(market_id: str, source: str = "polymarket") -> dict:
             resp = requests.get(f"{POLYMARKET_GAMMA_URL}/markets/{market_id}", timeout=15)
             resp.raise_for_status()
             m = resp.json()
-            price_yes = float(m.get("outcomePrices", "[0.5]").strip("[]").split(",")[0]) if isinstance(m.get("outcomePrices"), str) else 0.5
+            price_yes = 0.5
+            outcome_prices = m.get("outcomePrices", "")
+            if isinstance(outcome_prices, str) and outcome_prices:
+                try:
+                    parsed = json.loads(outcome_prices)
+                    if isinstance(parsed, list) and parsed:
+                        price_yes = float(parsed[0])
+                except Exception:
+                    pass
             return {"price_yes": price_yes, "price_no": 1 - price_yes}
         else:
             resp = requests.get(f"{MANIFOLD_API_URL}/market/{market_id}", timeout=15)
