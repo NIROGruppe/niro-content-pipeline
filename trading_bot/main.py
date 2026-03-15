@@ -14,6 +14,7 @@ from trading_bot.agents.prediction_agent import predict
 from trading_bot.agents.risk_agent import evaluate_and_trade
 from trading_bot.agents.postmortem_agent import run_postmortem
 from trading_bot.utils.market_api import get_market_price
+from trading_bot.agents.survival import get_survival_status, check_auto_pause
 
 
 _bot_thread = None
@@ -25,7 +26,17 @@ def run_pipeline_once():
     settings = load_settings()
     dry_run = settings.get("dry_run", True)
 
-    log_event("INFO", "orchestrator", f"Pipeline run started ({'DRY RUN' if dry_run else 'LIVE'})")
+    # Survival check — don't waste API calls if dead
+    survival = get_survival_status()
+    if survival["is_dead"]:
+        check_auto_pause()
+        log_event("CRITICAL", "orchestrator",
+                  f"BOT DEAD. Bankroll ${survival['current_bankroll']:.2f}. Pipeline aborted.")
+        return
+
+    log_event("INFO", "orchestrator",
+              f"Pipeline run started ({'DRY RUN' if dry_run else 'LIVE'}) | "
+              f"{survival['stage_emoji']} {survival['stage_name']} — ${survival['current_bankroll']:.2f}")
 
     # Step 1: Scan
     flagged = run_scan()

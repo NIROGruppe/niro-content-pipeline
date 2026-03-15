@@ -45,7 +45,9 @@ DEFAULTS = {
     "kelly_fraction": 0.25,          # Fractional Kelly (25%)
     "max_bet_pct": 0.05,             # Max 5% of bankroll per trade
     "min_edge": 0.03,                # Min 3% edge to trade
-    "initial_bankroll": 1000.0,      # Starting bankroll in $
+    "initial_bankroll": 20.0,        # Starting bankroll in $
+    "starting_bankroll": 20.0,       # Survival system: starting capital
+    "bankroll_goal": 1000.0,         # Survival system: target
 
     # Bot
     "scan_interval_seconds": 300,    # Scan every 5 minutes

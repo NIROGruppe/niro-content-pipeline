@@ -4,6 +4,7 @@ Agent 4: Risk Agent — Kelly Criterion sizing, risk checks, and trade execution
 from datetime import datetime
 from trading_bot.config import load_settings
 from trading_bot.db.database import insert_trade, get_open_trades, log_event
+from trading_bot.agents.survival import get_survival_status, check_auto_pause
 
 
 def evaluate_and_trade(prediction: dict, market: dict, dry_run: bool = True) -> dict:
@@ -13,20 +14,36 @@ def evaluate_and_trade(prediction: dict, market: dict, dry_run: bool = True) -> 
     """
     settings = load_settings()
 
+    # Survival pressure — override parameters based on bankroll health
+    survival = get_survival_status()
+
+    if survival["is_dead"]:
+        check_auto_pause()
+        log_event("CRITICAL", "risk_agent",
+                  f"DEAD — bankroll ${survival['current_bankroll']:.2f}. Trade blocked.")
+        return {"status": "blocked", "block_reason": "DEAD — bankroll below survival threshold"}
+
+    settings["kelly_fraction"] = survival["kelly_fraction"]
+    settings["max_bet_pct"] = survival["max_bet_pct"]
+    settings["min_edge"] = survival["min_edge"]
+    settings["confidence_threshold"] = survival["confidence_threshold"]
+
     edge = prediction.get("edge", 0)
     confidence = prediction.get("confidence", 0)
     position = prediction.get("position")
     true_prob = prediction.get("true_prob", 0.5)
     market_prob = prediction.get("market_prob", 0.5)
 
-    # Get current bankroll
-    bankroll = settings.get("initial_bankroll", 1000)
+    # Get current bankroll from survival system
+    bankroll = survival["current_bankroll"]
     open_trades = get_open_trades()
     total_open_exposure = sum(t.get("size", 0) for t in open_trades)
     available_bankroll = bankroll - total_open_exposure
 
     log_event("INFO", "risk_agent",
-              f"Evaluating: {prediction.get('question', '')[:50]}... edge={edge:.1%} conf={confidence}")
+              f"[{survival['stage_emoji']} {survival['stage_name']}] "
+              f"Bankroll=${survival['current_bankroll']:.2f} ({survival['ratio']:.1f}x) | "
+              f"Evaluating: {prediction.get('question', '')[:40]}... edge={edge:.1%} conf={confidence}")
 
     # ─── RISK CHECKS ─────────────────────────────────────────────────────
 

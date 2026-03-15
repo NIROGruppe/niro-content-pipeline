@@ -47,6 +47,7 @@ from trading_bot.db.database import (
 )
 from trading_bot.config import load_settings, save_settings, DEFAULTS
 from trading_bot.main import start_bot, stop_bot, is_bot_running, run_pipeline_once, settle_trade_manually
+from trading_bot.agents.survival import get_survival_status, STAGES
 from trading_bot.dashboard.components.charts import (
     pnl_line_chart, win_loss_bar_chart, confidence_distribution,
     edge_vs_pnl_scatter, postmortem_category_chart,
@@ -59,9 +60,9 @@ st.markdown("---")
 
 # ─── TABS ────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Overview", "🔍 Active Markets", "⚡ Live Trades",
-    "📜 Trade History", "🔬 Postmortem", "⚙️ Settings"
+    "📜 Trade History", "🔬 Postmortem", "⚙️ Settings", "🧬 Survival"
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -134,11 +135,48 @@ with tab1:
 
     st.markdown("---")
 
+    # ── SURVIVAL STATUS ──
+    survival = get_survival_status()
+
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg, #0a0a0a, #1a1a1a);border:2px solid {survival["stage_color"]};'
+        f'border-radius:16px;padding:24px;margin-bottom:20px;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        f'<div>'
+        f'<div style="font-size:14px;color:#888;">SURVIVAL STAGE</div>'
+        f'<div style="font-size:32px;font-weight:900;color:{survival["stage_color"]};">'
+        f'{survival["stage_emoji"]} {survival["stage_name"]}</div>'
+        f'<div style="font-size:12px;color:#666;margin-top:4px;">{survival["stage_description"]}</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div style="font-size:14px;color:#888;">BANKROLL</div>'
+        f'<div style="font-size:28px;font-weight:800;color:white;">${survival["current_bankroll"]:,.2f}</div>'
+        f'<div style="font-size:12px;color:#888;">{survival["ratio"]:.1f}x Start · {survival["progress_to_goal"]:.1f}% to Goal</div>'
+        f'</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    # Progress bar $20 → $1000
+    progress_pct = min(survival["progress_to_goal"] / 100, 1.0)
+    st.markdown(
+        f'<div style="background:#1a1a1a;border-radius:8px;height:24px;margin-bottom:20px;overflow:hidden;">'
+        f'<div style="background:linear-gradient(90deg, {survival["stage_color"]}, #FFD700);'
+        f'width:{max(progress_pct * 100, 1):.1f}%;height:100%;border-radius:8px;'
+        f'display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;'
+        f'color:#000;">${survival["current_bankroll"]:.0f} / ${survival["goal"]:.0f}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("---")
+
     # Stats
     st.markdown('<div class="section-label">📊 Performance</div>', unsafe_allow_html=True)
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("💰 Bankroll", f"${settings.get('initial_bankroll', 1000):,.2f}")
+    m1.metric("💰 Bankroll", f"${survival['current_bankroll']:,.2f}")
     m2.metric("📈 Today P&L", f"${stats['today_pnl']:+,.2f}",
               delta=f"{stats['today_pnl']:+,.2f}")
     m3.metric("🎯 Win Rate", f"{stats['win_rate']}%",
@@ -403,8 +441,15 @@ with tab6:
             min_edge = st.slider("Min Edge (%)", 1, 30, int(settings.get("min_edge", 0.05) * 100))
 
         st.markdown("---")
-        st.markdown("**Bankroll**")
-        bankroll = st.number_input("Starting Bankroll ($)", value=float(settings.get("initial_bankroll", 1000)), step=100.0)
+        st.markdown("**Bankroll & Survival**")
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            bankroll = st.number_input("Starting Bankroll ($)", value=float(settings.get("starting_bankroll", 20.0)), step=5.0)
+        with bc2:
+            goal = st.number_input("Goal ($)", value=float(settings.get("bankroll_goal", 1000.0)), step=100.0)
+
+        st.info("⚠️ Kelly, Max Bet, Min Edge, and Confidence are **base values**. "
+                "The Survival System overrides them automatically based on bankroll health.")
 
         submitted = st.form_submit_button("💾 Save Settings", use_container_width=True, type="primary")
         if submitted:
@@ -417,6 +462,8 @@ with tab6:
                 "max_bet_pct": max_bet / 100,
                 "min_edge": min_edge / 100,
                 "initial_bankroll": bankroll,
+                "starting_bankroll": bankroll,
+                "bankroll_goal": goal,
                 "dry_run": settings.get("dry_run", True),
                 "bot_status": settings.get("bot_status", "PAUSED"),
             }
@@ -446,5 +493,99 @@ with tab6:
         connected = _check_key(key)
         icon = "🟢" if connected else "🔴"
         st.markdown(f"{icon} **{name}** — {'Connected' if connected else 'Not configured'}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 7: SURVIVAL
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab7:
+    survival = get_survival_status()
+
+    st.markdown('<div class="section-label">🧬 Survival Pressure System</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"Starting with **${survival['starting_bankroll']:.0f}**, "
+        f"goal is **${survival['goal']:,.0f}** — "
+        f"a **{survival['goal'] / survival['starting_bankroll']:.0f}x** return."
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Current stage highlight
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg, #0a0a0a, #1a1a1a);border:3px solid {survival["stage_color"]};'
+        f'border-radius:16px;padding:32px;text-align:center;margin-bottom:24px;">'
+        f'<div style="font-size:48px;">{survival["stage_emoji"]}</div>'
+        f'<div style="font-size:28px;font-weight:900;color:{survival["stage_color"]};margin-top:8px;">'
+        f'{survival["stage_name"]}</div>'
+        f'<div style="font-size:16px;color:#888;margin-top:8px;">{survival["stage_description"]}</div>'
+        f'<div style="margin-top:16px;font-size:14px;color:#aaa;">'
+        f'Bankroll: <b>${survival["current_bankroll"]:,.2f}</b> · '
+        f'Ratio: <b>{survival["ratio"]:.2f}x</b> · '
+        f'Progress: <b>{survival["progress_to_goal"]:.1f}%</b>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    # Active parameters
+    st.markdown('<div class="section-label">📐 Active Parameters (Survival-Adjusted)</div>', unsafe_allow_html=True)
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Kelly Fraction", f"{survival['kelly_fraction']:.2f}")
+    p2.metric("Max Bet", f"{survival['max_bet_pct']:.0%}")
+    p3.metric("Min Edge", f"{survival['min_edge']:.0%}")
+    p4.metric("Min Confidence", f"{survival['confidence_threshold']}%")
+
+    st.markdown("---")
+
+    # Full stage breakdown
+    st.markdown('<div class="section-label">📊 All Stages</div>', unsafe_allow_html=True)
+
+    for i, stage in enumerate(STAGES):
+        is_active = stage["name"] == survival["stage_name"]
+        border = f"3px solid {stage['color']}" if is_active else "1px solid #2a2a2a"
+        bg = "#1a1a1a" if is_active else "#111"
+        glow = f"box-shadow: 0 0 20px {stage['color']}40;" if is_active else ""
+
+        bankroll_low = stage["min_ratio"] * survival["starting_bankroll"]
+        bankroll_high = stage["max_ratio"] * survival["starting_bankroll"] if stage["max_ratio"] != float("inf") else "∞"
+        bankroll_range = f"${bankroll_low:.0f} – {'$' + f'{bankroll_high:.0f}' if isinstance(bankroll_high, float) else bankroll_high}"
+
+        active_label = ' <span style="color:#FFD700;font-weight:900;"> ← YOU ARE HERE</span>' if is_active else ""
+
+        st.markdown(
+            f'<div style="background:{bg};border:{border};border-radius:12px;'
+            f'padding:16px;margin-bottom:8px;{glow}">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div>'
+            f'<span style="font-size:20px;">{stage["emoji"]}</span> '
+            f'<span style="font-size:16px;font-weight:800;color:{stage["color"]};">{stage["name"]}</span>'
+            f'{active_label}'
+            f'<div style="font-size:12px;color:#666;margin-top:4px;">{stage["description"]}</div>'
+            f'</div>'
+            f'<div style="text-align:right;font-size:12px;color:#888;">'
+            f'<div>{bankroll_range}</div>'
+            f'<div>Kelly: {stage["kelly_fraction"]:.2f} · '
+            f'Max Bet: {stage["max_bet_pct"]:.0%} · '
+            f'Min Edge: {stage["min_edge"]:.0%} · '
+            f'Conf: {stage["confidence_threshold"]}%</div>'
+            f'</div>'
+            f'</div></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("---")
+
+    # Next milestone
+    if survival["next_stage_at"]:
+        needed = survival["next_stage_at"] - survival["current_bankroll"]
+        if needed > 0:
+            next_stage = STAGES[survival["stage_index"] + 1]
+            st.markdown(
+                f"**Next stage:** {next_stage['emoji']} **{next_stage['name']}** "
+                f"at **${survival['next_stage_at']:.2f}** "
+                f"(need **${needed:.2f}** more)"
+            )
+    else:
+        st.markdown("**You're at the highest stage! Push to $1,000!**")
 
 st.markdown("<br><br>", unsafe_allow_html=True)
