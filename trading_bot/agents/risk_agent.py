@@ -98,7 +98,9 @@ def evaluate_and_trade(prediction: dict, market: dict, dry_run: bool = True) -> 
     bet_pct = min(kelly_bet, max_bet_pct)
     bet_size = round(available_bankroll * bet_pct, 2)
 
-    if bet_size < 1:
+    # Enforce minimum bet of $1 for dry run, block if Kelly says < $0.50
+    min_bet = 1.0 if dry_run else 5.0
+    if bet_size < 0.50:
         trade = {
             "market_id": market.get("id"),
             "market_question": prediction.get("question", ""),
@@ -119,6 +121,9 @@ def evaluate_and_trade(prediction: dict, market: dict, dry_run: bool = True) -> 
         }
         trade_id = insert_trade(trade)
         return {**trade, "id": trade_id}
+
+    # Round up to minimum bet
+    bet_size = max(bet_size, min_bet)
 
     # ─── PLACE TRADE ─────────────────────────────────────────────────────
 

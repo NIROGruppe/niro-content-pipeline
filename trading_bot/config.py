@@ -39,12 +39,12 @@ DEFAULTS = {
     "spread_threshold": 0.03,        # 3% spread = flag
 
     # Prediction Agent
-    "confidence_threshold": 70,      # Min confidence to trade (0-100)
+    "confidence_threshold": 45,      # Min confidence to trade (0-100)
 
     # Risk Agent
     "kelly_fraction": 0.25,          # Fractional Kelly (25%)
     "max_bet_pct": 0.05,             # Max 5% of bankroll per trade
-    "min_edge": 0.05,                # Min 5% edge to trade
+    "min_edge": 0.03,                # Min 3% edge to trade
     "initial_bankroll": 1000.0,      # Starting bankroll in $
 
     # Bot
