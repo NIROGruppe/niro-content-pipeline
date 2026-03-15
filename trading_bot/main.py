@@ -33,8 +33,8 @@ def run_pipeline_once():
         log_event("INFO", "orchestrator", "No flagged markets found. Pipeline complete.")
         return
 
-    # Step 2: Research (parallel)
-    research_results = run_research(flagged)
+    # Step 2: Research top 5 flagged markets (parallel)
+    research_results = run_research(flagged[:5])
 
     # Step 3-4: Predict & Risk for each researched market
     for research in research_results:
