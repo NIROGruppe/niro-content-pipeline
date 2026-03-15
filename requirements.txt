@@ -9,3 +9,6 @@ anthropic
 tavily-python
 pytrends
 supabase
+plotly
+feedparser
+pandas
