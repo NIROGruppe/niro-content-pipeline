@@ -87,34 +87,25 @@ Content-Eintrag:
 {content_json}"""
 
     # Try Langdock first, fall back to Claude
-    raw_text = ""
-    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
+    for api_call, label in [(_call_langdock, "Langdock"), (_call_claude, "Claude")]:
+        if label == "Langdock" and not (LANGDOCK_API_KEY and LANGDOCK_AGENT_ID):
+            continue
+        if label == "Claude" and not ANTHROPIC_API_KEY:
+            continue
         try:
-            raw_text = _call_langdock(prompt)
+            raw = api_call(prompt)
+            text = _extract_json_text(raw)
+            return json.loads(text)
         except Exception as e:
-            print(f"  Langdock Fehler: {e} — Wechsle zu Claude...")
+            print(f"  {label} Fehler: {e}")
 
-    if not raw_text and ANTHROPIC_API_KEY:
-        try:
-            raw_text = _call_claude(prompt)
-        except Exception as e:
-            print(f"  Claude Fehler: {e}")
-
-    # JSON aus Antwort parsen
-    try:
-        if "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        return json.loads(raw_text.strip())
-    except json.JSONDecodeError:
-        return {
-            "mood": "Konnte nicht geparst werden",
-            "colors": [{"name": "Primär", "hex": "#1a1a2e"}],
-            "shots": [{"number": 1, "description": raw_text[:200]}],
-            "effort": "Mittel",
-            "production_notes": raw_text[:300]
-        }
+    return {
+        "mood": "API nicht erreichbar",
+        "colors": [{"name": "Primär", "hex": "#1a1a2e"}],
+        "shots": [{"number": 1, "description": "Bitte erneut versuchen"}],
+        "effort": "Mittel",
+        "production_notes": "Konnte nicht generiert werden"
+    }
 
 
 def search_reference_videos(topic: str, max_results: int = 3) -> list:
@@ -218,47 +209,60 @@ WICHTIG:
 - Tage: Montag bis Sonntag, dann wieder Montag etc.
 - Verteile Posts gleichmaessig auf die Tage"""
 
-    # Try Langdock first, fall back to Claude on error
-    raw_text = ""
+    # Try each API — if response can't be parsed, try the next one
     errors = []
 
+    # 1. Try Langdock
     if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
         try:
-            raw_text = _call_langdock(prompt)
+            raw = _call_langdock(prompt)
+            parsed = _try_parse_json_plan(raw)
+            if parsed:
+                return parsed
+            errors.append("Langdock: Antwort kam, aber JSON ungueltig")
         except Exception as e:
             errors.append(f"Langdock: {e}")
-            print(f"  Langdock Fehler: {e}")
 
-    if not raw_text and ANTHROPIC_API_KEY:
+    # 2. Try Claude (always if Langdock failed or returned bad JSON)
+    if ANTHROPIC_API_KEY:
         try:
             print(f"  Wechsle zu Claude API...")
-            raw_text = _call_claude(prompt)
+            raw = _call_claude(prompt)
+            parsed = _try_parse_json_plan(raw)
+            if parsed:
+                return parsed
+            errors.append("Claude: Antwort kam, aber JSON ungueltig")
         except Exception as e:
             errors.append(f"Claude: {e}")
-            print(f"  Claude API Fehler: {e}")
 
-    if not raw_text:
-        if not LANGDOCK_API_KEY and not ANTHROPIC_API_KEY:
-            raise ValueError("Kein API-Key konfiguriert (weder LANGDOCK noch ANTHROPIC_API_KEY)")
-        error_detail = " | ".join(errors) if errors else "Keine Antwort erhalten"
-        raise ValueError(f"Content-Plan Generierung fehlgeschlagen: {error_detail}")
+    if not LANGDOCK_API_KEY and not ANTHROPIC_API_KEY:
+        raise ValueError("Kein API-Key konfiguriert (weder LANGDOCK noch ANTHROPIC_API_KEY)")
 
-    raw_text = _extract_json_text(raw_text)
+    error_detail = " | ".join(errors)
+    raise ValueError(f"Content-Plan fehlgeschlagen: {error_detail}")
 
-    # Try parsing as-is
+
+def _try_parse_json_plan(raw_text: str) -> list:
+    """Try to parse a JSON plan from raw API response. Returns list or None."""
+    if not raw_text or not raw_text.strip():
+        return None
+
+    text = _extract_json_text(raw_text)
+
+    # Try direct parse
     try:
-        result = json.loads(raw_text)
-        if isinstance(result, list):
+        result = json.loads(text)
+        if isinstance(result, list) and len(result) > 0:
             return result
     except json.JSONDecodeError:
         pass
 
-    # Try to repair truncated JSON — find last complete object
-    repaired = _repair_truncated_json_array(raw_text)
+    # Try repair truncated JSON
+    repaired = _repair_truncated_json_array(text)
     if repaired:
         return repaired
 
-    raise ValueError(f"Content-Plan JSON konnte nicht geparst werden. Antwort: {raw_text[:300]}")
+    return None
 
 
 def _extract_json_text(raw_text: str) -> str:
