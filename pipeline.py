@@ -220,29 +220,28 @@ WICHTIG:
 
     # Try Langdock first, fall back to Claude on error
     raw_text = ""
-    used_fallback = False
+    errors = []
 
     if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
         try:
             raw_text = _call_langdock(prompt)
         except Exception as e:
+            errors.append(f"Langdock: {e}")
             print(f"  Langdock Fehler: {e}")
-            print(f"  Wechsle zu Claude API...")
-            used_fallback = True
 
     if not raw_text and ANTHROPIC_API_KEY:
         try:
+            print(f"  Wechsle zu Claude API...")
             raw_text = _call_claude(prompt)
-            used_fallback = True
         except Exception as e:
+            errors.append(f"Claude: {e}")
             print(f"  Claude API Fehler: {e}")
 
     if not raw_text:
-        print(f"  Warnung: Content-Plan konnte nicht generiert werden.")
-        return []
-
-    if used_fallback:
-        print(f"  (via Claude Fallback)")
+        if not LANGDOCK_API_KEY and not ANTHROPIC_API_KEY:
+            raise ValueError("Kein API-Key konfiguriert (weder LANGDOCK noch ANTHROPIC_API_KEY)")
+        error_detail = " | ".join(errors) if errors else "Keine Antwort erhalten"
+        raise ValueError(f"Content-Plan Generierung fehlgeschlagen: {error_detail}")
 
     try:
         if "```" in raw_text:
@@ -255,12 +254,11 @@ WICHTIG:
     except json.JSONDecodeError:
         pass
 
-    print(f"  Warnung: Content-Plan konnte nicht geparst werden.")
-    return []
+    raise ValueError(f"Content-Plan JSON konnte nicht geparst werden. Antwort: {raw_text[:200]}")
 
 
 def _call_langdock(prompt: str) -> str:
-    """Call Langdock API. Returns raw text response."""
+    """Call Langdock API. Returns raw text response or raises on failure."""
     headers = {
         "Authorization": f"Bearer {LANGDOCK_API_KEY}",
         "Content-Type": "application/json"
@@ -271,6 +269,7 @@ def _call_langdock(prompt: str) -> str:
         "stream": False
     }
 
+    response = None
     for attempt in range(3):
         response = requests.post(LANGDOCK_URL, headers=headers, json=payload, timeout=120)
         if response.status_code == 429:
@@ -280,6 +279,8 @@ def _call_langdock(prompt: str) -> str:
             continue
         response.raise_for_status()
         break
+    else:
+        raise RuntimeError(f"Langdock: nach 3 Versuchen fehlgeschlagen (letzter Status: {response.status_code if response else 'keine Antwort'})")
 
     data = response.json()
     raw_text = ""
@@ -297,6 +298,9 @@ def _call_langdock(prompt: str) -> str:
                         raw_text = block.get("text", "")
                     elif isinstance(block, str):
                         raw_text = block
+
+    if not raw_text:
+        raise RuntimeError(f"Langdock: leere Antwort erhalten")
     return raw_text
 
 
@@ -305,16 +309,20 @@ def _call_claude(prompt: str) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    response = client.messages.create(
+    with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}]
-    )
+    ) as stream:
+        response = stream.get_final_message()
 
     for block in response.content:
         if block.type == "text":
-            return block.text.strip()
-    return ""
+            text = block.text.strip()
+            if text:
+                return text
+
+    raise RuntimeError("Claude: leere Antwort erhalten")
 
 
 def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 1, notes: str = "") -> str:
