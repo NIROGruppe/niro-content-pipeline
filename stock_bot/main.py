@@ -9,6 +9,7 @@ from stock_bot.db.database import init_db, log_event, get_watchlist, get_open_tr
 from stock_bot.agents.news_agent import scan_ticker
 from stock_bot.agents.signal_agent import generate_signal
 from stock_bot.agents.postmortem_agent import run_postmortem
+from stock_bot.agents.underdog_agent import run_underdog_scan as _underdog_scan
 from stock_bot.utils.price_api import get_current_price, get_price_history, calculate_technicals
 from stock_bot.db.database import close_trade as db_close_trade
 
@@ -66,7 +67,25 @@ def run_scan_once():
     log_event("INFO", "orchestrator",
               f"Scan complete: {buys} BUY, {sells} SELL, {holds} HOLD signals")
 
+    # Run underdog scan alongside regular scan
+    try:
+        run_underdog_scan()
+    except Exception as e:
+        log_event("ERROR", "orchestrator", f"Underdog scan failed: {e}")
+
     return signals
+
+
+def run_underdog_scan() -> list:
+    """Run the underdog scanner independently."""
+    log_event("INFO", "orchestrator", "Starting underdog scan...")
+    try:
+        results = _underdog_scan()
+        log_event("INFO", "orchestrator", f"Underdog scan found {len(results)} stocks")
+        return results
+    except Exception as e:
+        log_event("ERROR", "orchestrator", f"Underdog scan error: {e}")
+        return []
 
 
 def close_trade_with_postmortem(trade_id: int, exit_price: float) -> dict:

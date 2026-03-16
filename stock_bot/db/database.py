@@ -90,6 +90,21 @@ def init_db():
             message TEXT,
             created_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS underdogs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            name TEXT,
+            market_cap REAL,
+            price REAL,
+            volume_ratio REAL,
+            reddit_mentions INTEGER,
+            sentiment_score REAL,
+            catalyst TEXT,
+            score REAL,
+            source TEXT,
+            discovered_at TEXT
+        );
     """)
     conn.commit()
     conn.close()
@@ -293,6 +308,48 @@ def insert_postmortem(data: dict) -> int:
 def get_postmortems(limit: int = 50) -> list:
     conn = _conn()
     rows = conn.execute("SELECT * FROM postmortems ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─── UNDERDOGS ────────────────────────────────────────────────────────────
+
+def insert_underdog(data: dict) -> int:
+    conn = _conn()
+    cur = conn.execute(
+        "INSERT INTO underdogs (ticker, name, market_cap, price, volume_ratio, "
+        "reddit_mentions, sentiment_score, catalyst, score, source, discovered_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            data["ticker"], data.get("name", ""), data.get("market_cap", 0),
+            data.get("price", 0), data.get("volume_ratio", 1.0),
+            data.get("reddit_mentions", 0), data.get("sentiment_score", 0),
+            data.get("catalyst", ""), data.get("score", 0),
+            data.get("source", ""), datetime.now().isoformat()
+        )
+    )
+    conn.commit()
+    underdog_id = cur.lastrowid
+    conn.close()
+    return underdog_id
+
+
+def get_underdogs(limit: int = 20) -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM underdogs ORDER BY score DESC, id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_recent_underdogs(days: int = 7) -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM underdogs WHERE discovered_at >= datetime('now', ?) "
+        "ORDER BY score DESC, id DESC",
+        (f"-{days} days",)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

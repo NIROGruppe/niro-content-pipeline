@@ -18,7 +18,7 @@ def _secret(key: str, default: str = "") -> str:
 ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
 
 DEFAULTS = {
-    "watchlist": "AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL,META,AMD,NFLX,SPY",
+    "watchlist": "AAPL,TSLA,NVDA,MSFT,AMZN,GOOGL,META,AMD,NFLX,SPY,QQQ,DIA,SAP,SIE.DE,BAS.DE",
     "scan_interval_seconds": 600,
     "sentiment_bullish_threshold": 0.3,
     "sentiment_bearish_threshold": -0.3,

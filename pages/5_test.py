@@ -601,9 +601,10 @@ def render_stock_bot():
         get_open_trades as stock_open_trades, get_closed_trades,
         get_all_trades as stock_all_trades, insert_trade as stock_insert_trade,
         get_postmortems as stock_postmortems, get_recent_logs as stock_logs,
+        get_underdogs, get_recent_underdogs,
     )
     from stock_bot.config import load_settings as stock_load_settings, save_settings as stock_save_settings
-    from stock_bot.main import run_scan_once, close_trade_with_postmortem, start_bot as stock_start, stop_bot as stock_stop, is_bot_running as stock_running
+    from stock_bot.main import run_scan_once, run_underdog_scan, close_trade_with_postmortem, start_bot as stock_start, stop_bot as stock_stop, is_bot_running as stock_running
 
     stock_init_db()
 
@@ -614,9 +615,9 @@ def render_stock_bot():
     st.markdown("# 📰 Stock & News Bot")
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Overview", "📰 Signals", "📒 Trade Journal",
-        "🔬 Postmortems", "📋 News Feed", "⚙️ Settings"
+        "🔬 Postmortems", "🔥 Underdogs", "📋 News Feed", "⚙️ Settings"
     ])
 
     # ── TAB 1: OVERVIEW ──
@@ -868,8 +869,118 @@ def render_stock_bot():
         else:
             st.info("Keine Postmortems. Werden automatisch nach Verlust-Trades erstellt.")
 
-    # ── TAB 5: NEWS FEED ──
+    # ── TAB 5: UNDERDOGS ──
     with tab5:
+        st.markdown('<div class="section-label">🔥 Underdog Scanner</div>', unsafe_allow_html=True)
+        st.markdown("*Small/Mid-Cap Stocks mit Momentum — unter dem Radar, aber im Aufwind*")
+
+        uc1, uc2 = st.columns([3, 1])
+        with uc2:
+            if st.button("🔍 Underdog Scan starten", use_container_width=True, key="underdog_scan"):
+                with st.spinner("Scanning Reddit & checking volume..."):
+                    run_underdog_scan()
+                st.success("Underdog Scan abgeschlossen!")
+                st.rerun()
+
+        with uc1:
+            time_filter = st.selectbox("Zeitraum", ["Letzte 7 Tage", "Letzte 30 Tage", "Alle"], key="ud_filter")
+
+        st.markdown("---")
+
+        if time_filter == "Letzte 7 Tage":
+            underdogs = get_recent_underdogs(7)
+        elif time_filter == "Letzte 30 Tage":
+            underdogs = get_recent_underdogs(30)
+        else:
+            underdogs = get_underdogs(50)
+
+        if underdogs:
+            for i, ud in enumerate(underdogs):
+                score = ud.get("score", 0)
+                vol_ratio = ud.get("volume_ratio", 1.0)
+                sentiment = ud.get("sentiment_score", 0)
+                mentions = ud.get("reddit_mentions", 0)
+                catalyst = ud.get("catalyst", "")
+                cap_b = (ud.get("market_cap", 0) or 0) / 1e9
+
+                # Score color
+                if score >= 60:
+                    score_color = "#2ecc71"
+                    score_label = "HOT"
+                elif score >= 40:
+                    score_color = "#f39c12"
+                    score_label = "WARM"
+                else:
+                    score_color = "#888"
+                    score_label = "COOL"
+
+                # Sentiment color
+                if sentiment > 0.3:
+                    sent_color = "#2ecc71"
+                elif sentiment < -0.3:
+                    sent_color = "#e74c3c"
+                else:
+                    sent_color = "#f39c12"
+
+                # Volume ratio indicator
+                if vol_ratio >= 5:
+                    vol_label = "🔥🔥🔥"
+                elif vol_ratio >= 3:
+                    vol_label = "🔥🔥"
+                elif vol_ratio >= 2:
+                    vol_label = "🔥"
+                else:
+                    vol_label = ""
+
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg, #0a0a1a, #1a1a2e);'
+                    f'border:1px solid {score_color};border-radius:12px;padding:20px;margin-bottom:12px;">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                    f'<div>'
+                    f'<span style="font-size:20px;font-weight:900;">{ud.get("ticker", "?")}</span> '
+                    f'<span style="color:#888;font-size:14px;">{ud.get("name", "")}</span>'
+                    f'</div>'
+                    f'<div style="background:{score_color}20;border:1px solid {score_color};'
+                    f'border-radius:20px;padding:4px 14px;">'
+                    f'<span style="color:{score_color};font-weight:800;font-size:16px;">'
+                    f'{score:.0f}</span>'
+                    f'<span style="color:{score_color};font-size:11px;margin-left:4px;">{score_label}</span>'
+                    f'</div>'
+                    f'</div>'
+                    f'<div style="display:flex;gap:24px;margin-top:12px;flex-wrap:wrap;">'
+                    f'<div style="text-align:center;">'
+                    f'<div style="font-size:11px;color:#666;">PRICE</div>'
+                    f'<div style="font-size:16px;font-weight:700;">${ud.get("price", 0):.2f}</div>'
+                    f'</div>'
+                    f'<div style="text-align:center;">'
+                    f'<div style="font-size:11px;color:#666;">MKT CAP</div>'
+                    f'<div style="font-size:16px;font-weight:700;">${cap_b:.1f}B</div>'
+                    f'</div>'
+                    f'<div style="text-align:center;">'
+                    f'<div style="font-size:11px;color:#666;">VOL RATIO</div>'
+                    f'<div style="font-size:16px;font-weight:700;">{vol_ratio:.1f}x {vol_label}</div>'
+                    f'</div>'
+                    f'<div style="text-align:center;">'
+                    f'<div style="font-size:11px;color:#666;">REDDIT</div>'
+                    f'<div style="font-size:16px;font-weight:700;">{mentions} mentions</div>'
+                    f'</div>'
+                    f'<div style="text-align:center;">'
+                    f'<div style="font-size:11px;color:#666;">SENTIMENT</div>'
+                    f'<div style="font-size:16px;font-weight:700;color:{sent_color};">{sentiment:+.2f}</div>'
+                    f'</div>'
+                    f'</div>'
+                    + (f'<div style="margin-top:12px;padding:10px;background:#ffffff08;border-radius:8px;font-size:13px;color:#aaa;"><b>Catalyst:</b> {catalyst}</div>' if catalyst else '')
+                    + f'<div style="font-size:11px;color:#555;margin-top:8px;">'
+                    f'Entdeckt: {ud.get("discovered_at", "")[:16]} · Quelle: {ud.get("source", "")}'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("Noch keine Underdogs entdeckt. Starte einen Scan mit dem Button oben rechts.")
+
+    # ── TAB 6: NEWS FEED ──
+    with tab6:
         st.markdown('<div class="section-label">📋 Activity Log</div>', unsafe_allow_html=True)
         logs = stock_logs(30)
         if logs:
@@ -885,8 +996,8 @@ def render_stock_bot():
         else:
             st.info("Noch keine Aktivität.")
 
-    # ── TAB 6: SETTINGS ──
-    with tab6:
+    # ── TAB 7: SETTINGS ──
+    with tab7:
         st.markdown('<div class="section-label">⚙️ Settings</div>', unsafe_allow_html=True)
         settings = stock_load_settings()
 
