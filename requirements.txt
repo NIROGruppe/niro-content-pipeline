@@ -12,3 +12,4 @@ supabase
 plotly
 feedparser
 pandas
+yfinance

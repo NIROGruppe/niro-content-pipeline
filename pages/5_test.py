@@ -114,7 +114,7 @@ def render_landing():
             </div>
             <div style="margin-top:16px;padding:8px;background:#2ecc7120;border-radius:8px;
                         text-align:center;font-size:12px;color:#2ecc71;">
-                ✅ Sofort nutzbar — keine API Keys nötig
+                ✅ Sofort nutzbar — Trade Journal mit Postmortem-Lernschleife
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -594,7 +594,19 @@ def render_polymarket_bot():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def render_stock_bot():
-    # Back button
+    from stock_bot.db.database import (
+        init_db as stock_init_db, get_stats as stock_stats,
+        get_watchlist, add_ticker, remove_ticker,
+        get_signals, get_all_latest_sentiments,
+        get_open_trades as stock_open_trades, get_closed_trades,
+        get_all_trades as stock_all_trades, insert_trade as stock_insert_trade,
+        get_postmortems as stock_postmortems, get_recent_logs as stock_logs,
+    )
+    from stock_bot.config import load_settings as stock_load_settings, save_settings as stock_save_settings
+    from stock_bot.main import run_scan_once, close_trade_with_postmortem, start_bot as stock_start, stop_bot as stock_stop, is_bot_running as stock_running
+
+    stock_init_db()
+
     if st.button("← Zurück zur Übersicht", key="back_stock"):
         st.session_state["bot_view"] = "landing"
         st.rerun()
@@ -602,67 +614,330 @@ def render_stock_bot():
     st.markdown("# 📰 Stock & News Bot")
     st.markdown("---")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Dashboard", "📰 News Signals", "📈 Watchlist", "⚙️ Settings"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Overview", "📰 Signals", "📒 Trade Journal",
+        "🔬 Postmortems", "📋 News Feed", "⚙️ Settings"
     ])
 
-    # ── TAB 1: DASHBOARD ──
+    # ── TAB 1: OVERVIEW ──
     with tab1:
-        st.markdown('<div class="section-label">📊 Market Overview</div>', unsafe_allow_html=True)
+        settings = stock_load_settings()
+        stats = stock_stats()
 
-        st.markdown("""
-        <div style="background:linear-gradient(135deg, #0a1a0a, #1a2e1a);
-                    border:2px solid #2ecc71;border-radius:16px;padding:32px;
-                    text-align:center;margin-bottom:24px;">
-            <div style="font-size:48px;">📰</div>
-            <div style="font-size:24px;font-weight:800;color:#2ecc71;margin-top:12px;">
-                Stock & News Bot
-            </div>
-            <div style="font-size:14px;color:#888;margin-top:8px;">
-                KI-gesteuerte Aktien-Analyse basierend auf News-Sentiment
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Bot controls
+        st.markdown('<div class="section-label">🤖 Bot Control</div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
 
-        st.info("🚧 **Coming Soon** — Der Stock & News Bot wird gerade gebaut. "
-                "Er wird News scannen, Sentiment analysieren und Aktien-Signale generieren.")
+        with c1:
+            bot_status = settings.get("bot_status", "PAUSED")
+            sc = "#2ecc71" if bot_status == "RUNNING" else "#e74c3c"
+            st.markdown(
+                f'<div style="background:#1e1e1e;border:2px solid {sc};border-radius:12px;'
+                f'padding:20px;text-align:center;">'
+                f'<div style="font-size:12px;color:#888;">STATUS</div>'
+                f'<div style="font-size:24px;font-weight:800;color:{sc};">{bot_status}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+        with c2:
+            if st.button("▶️ Start", use_container_width=True, type="primary", key="stock_start"):
+                settings["bot_status"] = "RUNNING"
+                stock_save_settings(settings)
+                stock_start()
+                st.rerun()
+
+        with c3:
+            if st.button("⏹️ Stop", use_container_width=True, key="stock_stop"):
+                settings["bot_status"] = "PAUSED"
+                stock_save_settings(settings)
+                stock_stop()
+                st.rerun()
+
+        with c4:
+            if st.button("🔄 Scan Now", use_container_width=True, key="stock_scan"):
+                with st.spinner("Scanning all tickers..."):
+                    run_scan_once()
+                st.success("Scan complete!")
+                st.rerun()
 
         st.markdown("---")
-        st.markdown("**Geplante Features:**")
 
-        features = [
-            ("📡 News Scanner", "Scannt Reddit, Twitter, RSS, Google News nach Aktien-relevanten Nachrichten"),
-            ("🧠 Sentiment Analysis", "Claude AI analysiert News-Sentiment pro Aktie/Sektor"),
-            ("📈 Signal Generator", "Buy/Sell/Hold Empfehlungen basierend auf Sentiment + Kursdaten"),
-            ("🗺️ Sektor Heatmap", "Visuelle Übersicht welche Sektoren bullish/bearish sind"),
-            ("⚡ Echtzeit-Alerts", "Benachrichtigung bei starken Sentiment-Shifts"),
-            ("📊 Backtesting", "Historische Performance der Signale"),
-        ]
+        # Stats
+        st.markdown('<div class="section-label">📊 Performance</div>', unsafe_allow_html=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("💵 Total P&L", f"${stats['total_pnl']:+,.2f}")
+        m2.metric("🎯 Win Rate", f"{stats['win_rate']}%",
+                  delta=f"{stats['wins']}W / {stats['losses']}L")
+        m3.metric("📊 Total Trades", stats["total_trades"],
+                  delta=f"{stats['open_trades']} open")
+        m4.metric("📈 Today P&L", f"${stats['today_pnl']:+,.2f}")
 
-        for title, desc in features:
-            st.markdown(
-                f'<div style="background:#1e1e1e;border-left:4px solid #2ecc71;'
-                f'border-radius:8px;padding:12px 16px;margin-bottom:8px;">'
-                f'<div style="font-weight:700;font-size:14px;">{title}</div>'
-                f'<div style="font-size:12px;color:#888;margin-top:4px;">{desc}</div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+        st.markdown("---")
 
-    # ── TAB 2: NEWS SIGNALS (Preview) ──
+        # Latest signals
+        st.markdown('<div class="section-label">📰 Latest Signals</div>', unsafe_allow_html=True)
+        signals = get_signals(10)
+        if signals:
+            for s in signals[:8]:
+                d = s.get("direction", "HOLD")
+                emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(d, "⚪")
+                strength_color = {"STRONG": "#2ecc71", "MODERATE": "#f39c12", "WEAK": "#888"}.get(s.get("strength", ""), "#888")
+
+                st.markdown(
+                    f'<div style="background:#1e1e1e;border-left:4px solid {strength_color};'
+                    f'border-radius:8px;padding:12px 16px;margin-bottom:8px;">'
+                    f'<div style="display:flex;justify-content:space-between;">'
+                    f'<div><b>{s.get("ticker", "?")}</b> {emoji} <b>{d}</b> '
+                    f'<span style="color:{strength_color};">({s.get("strength", "?")})</span></div>'
+                    f'<div style="color:#888;">@ ${s.get("price_at_signal", 0):.2f}</div></div>'
+                    f'<div style="font-size:12px;color:#666;margin-top:4px;">{s.get("reasoning", "")[:120]}</div>'
+                    f'<div style="font-size:11px;color:#555;margin-top:2px;">{s.get("created_at", "")[:19]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("Keine Signale vorhanden. Klicke 'Scan Now' für den ersten Scan.")
+
+    # ── TAB 2: SIGNALS ──
     with tab2:
-        st.markdown('<div class="section-label">📰 News Sentiment Signals</div>', unsafe_allow_html=True)
-        st.info("Hier werden bald Live-News-Signale erscheinen.")
+        st.markdown('<div class="section-label">📰 Signal History</div>', unsafe_allow_html=True)
 
-    # ── TAB 3: WATCHLIST ──
+        # Sentiment overview
+        sentiments = get_all_latest_sentiments()
+        if sentiments:
+            st.markdown("**Aktuelles Sentiment pro Ticker:**")
+            cols = st.columns(min(len(sentiments), 5))
+            for i, sent in enumerate(sentiments[:10]):
+                score = sent.get("sentiment_score", 0)
+                if score > 0.3:
+                    color, label = "#2ecc71", "BULLISH"
+                elif score < -0.3:
+                    color, label = "#e74c3c", "BEARISH"
+                else:
+                    color, label = "#f39c12", "NEUTRAL"
+
+                with cols[i % 5]:
+                    st.markdown(
+                        f'<div style="background:#1e1e1e;border:1px solid {color};border-radius:8px;'
+                        f'padding:12px;text-align:center;margin-bottom:8px;">'
+                        f'<div style="font-weight:800;">{sent.get("ticker", "?")}</div>'
+                        f'<div style="color:{color};font-size:20px;font-weight:700;">{score:+.2f}</div>'
+                        f'<div style="font-size:11px;color:#888;">{label}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+        st.markdown("---")
+
+        # Full signal list
+        all_signals = get_signals(50)
+        if all_signals:
+            import pandas as pd
+            df = pd.DataFrame(all_signals)[["ticker", "direction", "strength", "sentiment_score", "price_at_signal", "reasoning", "created_at"]]
+            df.columns = ["Ticker", "Signal", "Strength", "Sentiment", "Price", "Reasoning", "Time"]
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # ── TAB 3: TRADE JOURNAL ──
     with tab3:
-        st.markdown('<div class="section-label">📈 Aktien Watchlist</div>', unsafe_allow_html=True)
-        st.info("Hier kannst du bald Aktien zur Watchlist hinzufügen.")
+        st.markdown('<div class="section-label">📒 Trade Journal</div>', unsafe_allow_html=True)
 
-    # ── TAB 4: SETTINGS ──
+        # Log new trade
+        with st.expander("➕ Neuen Trade eintragen", expanded=False):
+            with st.form("new_trade_form"):
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    trade_ticker = st.text_input("Ticker", placeholder="AAPL").upper()
+                    trade_direction = st.selectbox("Richtung", ["LONG", "SHORT"])
+                with tc2:
+                    trade_entry = st.number_input("Entry Price ($)", min_value=0.01, step=0.01)
+                    trade_size = st.number_input("Anzahl Aktien", min_value=0.01, step=1.0, value=1.0)
+
+                trade_notes = st.text_area("Notizen (optional)", placeholder="Warum diesen Trade?")
+
+                if st.form_submit_button("💾 Trade speichern", use_container_width=True, type="primary"):
+                    if trade_ticker and trade_entry > 0:
+                        tid = stock_insert_trade({
+                            "ticker": trade_ticker,
+                            "direction": trade_direction,
+                            "entry_price": trade_entry,
+                            "size": trade_size,
+                            "notes": trade_notes,
+                        })
+                        st.success(f"Trade #{tid} gespeichert!")
+                        st.rerun()
+
+        # Open trades
+        st.markdown("---")
+        st.markdown("**Offene Trades:**")
+        open_trades = stock_open_trades()
+        if open_trades:
+            for t in open_trades:
+                pnl_color = "#888"
+                st.markdown(
+                    f'<div style="background:#1e1e1e;border:1px solid #2a2a2a;border-radius:12px;'
+                    f'padding:16px;margin-bottom:12px;">'
+                    f'<div style="font-weight:700;">'
+                    f'{"🟢" if t["direction"] == "LONG" else "🔴"} '
+                    f'{t.get("ticker", "?")} — {t.get("direction", "?")} '
+                    f'@ ${t.get("entry_price", 0):.2f} × {t.get("size", 0):.1f}</div>'
+                    f'<div style="font-size:12px;color:#888;margin-top:4px;">'
+                    f'{t.get("notes", "") or "Keine Notizen"} · '
+                    f'Eröffnet: {t.get("opened_at", "")[:10]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+                cc1, cc2 = st.columns([3, 1])
+                with cc1:
+                    exit_price = st.number_input(
+                        f"Exit Price für #{t['id']}", min_value=0.01, step=0.01,
+                        key=f"exit_{t['id']}", value=t.get("entry_price", 0.01)
+                    )
+                with cc2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button(f"Trade schließen", key=f"close_{t['id']}"):
+                        result = close_trade_with_postmortem(t["id"], exit_price)
+                        if result.get("pnl", 0) >= 0:
+                            st.success(f"Gewinn: ${result['pnl']:+,.2f}")
+                        else:
+                            st.error(f"Verlust: ${result['pnl']:+,.2f} — Postmortem wird erstellt...")
+                        st.rerun()
+        else:
+            st.info("Keine offenen Trades.")
+
+        # Closed trades
+        st.markdown("---")
+        st.markdown("**Geschlossene Trades:**")
+        closed = get_closed_trades()
+        if closed:
+            for t in closed[:20]:
+                pnl = t.get("pnl", 0)
+                icon = "✅" if pnl > 0 else "❌" if pnl < 0 else "➖"
+                color = "#2ecc71" if pnl > 0 else "#e74c3c" if pnl < 0 else "#888"
+                st.markdown(
+                    f'<div style="font-size:13px;padding:6px 0;border-bottom:1px solid #1e1e1e;">'
+                    f'{icon} <b>{t.get("ticker", "?")}</b> {t.get("direction", "")} '
+                    f'${t.get("entry_price", 0):.2f} → ${t.get("exit_price", 0):.2f} '
+                    f'× {t.get("size", 0):.1f} '
+                    f'<span style="color:{color};font-weight:700;">P&L: ${pnl:+,.2f}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("Noch keine geschlossenen Trades.")
+
+    # ── TAB 4: POSTMORTEMS ──
     with tab4:
-        st.markdown('<div class="section-label">⚙️ Bot Settings</div>', unsafe_allow_html=True)
-        st.info("Settings werden mit dem Bot freigeschaltet.")
+        st.markdown('<div class="section-label">🔬 Loss Postmortems</div>', unsafe_allow_html=True)
+        postmortems = stock_postmortems()
+        if postmortems:
+            for pm in postmortems:
+                with st.expander(
+                    f"Trade #{pm.get('trade_id', '?')} — {pm.get('ticker', '?')} "
+                    f"(Verlust: ${pm.get('loss_amount', 0):.2f})"
+                ):
+                    st.markdown(f"**Was schief lief:** {pm.get('what_went_wrong', '–')}")
+                    st.markdown(f"**Pattern:** {pm.get('pattern_detected', '–')}")
+
+                    lessons = pm.get("lessons_learned", "[]")
+                    if isinstance(lessons, str):
+                        try:
+                            lessons = json.loads(lessons)
+                        except Exception:
+                            lessons = []
+                    if lessons:
+                        st.markdown("**Learnings:**")
+                        for lesson in lessons:
+                            st.markdown(f"- {lesson}")
+
+                    param_changes = pm.get("parameter_changes", "{}")
+                    if isinstance(param_changes, str):
+                        try:
+                            param_changes = json.loads(param_changes)
+                        except Exception:
+                            param_changes = {}
+                    if param_changes:
+                        st.markdown("**Parameter-Anpassungen:**")
+                        for param, change in param_changes.items():
+                            if isinstance(change, dict):
+                                st.markdown(
+                                    f"- `{param}`: {change.get('current')} → {change.get('suggested')} "
+                                    f"({change.get('reason', '')})"
+                                )
+
+                    st.markdown(f"*{pm.get('created_at', '')}*")
+        else:
+            st.info("Keine Postmortems. Werden automatisch nach Verlust-Trades erstellt.")
+
+    # ── TAB 5: NEWS FEED ──
+    with tab5:
+        st.markdown('<div class="section-label">📋 Activity Log</div>', unsafe_allow_html=True)
+        logs = stock_logs(30)
+        if logs:
+            for log in logs[:20]:
+                level = log.get("level", "INFO")
+                icon = {"INFO": "ℹ️", "WARN": "⚠️", "ERROR": "❌", "DEBUG": "🔍"}.get(level, "📌")
+                st.markdown(
+                    f'<div style="font-size:12px;color:#888;padding:4px 0;">'
+                    f'{icon} <b>[{log.get("agent", "?")}]</b> {log.get("message", "")} '
+                    f'<span style="color:#555;">{log.get("created_at", "")[:19]}</span></div>',
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("Noch keine Aktivität.")
+
+    # ── TAB 6: SETTINGS ──
+    with tab6:
+        st.markdown('<div class="section-label">⚙️ Settings</div>', unsafe_allow_html=True)
+        settings = stock_load_settings()
+
+        # Watchlist management
+        st.markdown("**📈 Watchlist**")
+        watchlist = get_watchlist()
+        if watchlist:
+            wl_tickers = [w["ticker"] for w in watchlist]
+            st.markdown(f"Aktuell: **{', '.join(wl_tickers)}**")
+
+            remove = st.selectbox("Ticker entfernen:", ["---"] + wl_tickers, key="remove_ticker")
+            if remove != "---" and st.button("❌ Entfernen", key="do_remove"):
+                remove_ticker(remove)
+                st.rerun()
+
+        new_ticker = st.text_input("Ticker hinzufügen:", placeholder="z.B. GOOGL", key="add_ticker_input")
+        if st.button("➕ Hinzufügen", key="do_add"):
+            if new_ticker.strip():
+                add_ticker(new_ticker.strip().upper())
+                st.success(f"{new_ticker.upper()} hinzugefügt!")
+                st.rerun()
+
+        st.markdown("---")
+
+        with st.form("stock_settings_form"):
+            st.markdown("**Signal Parameters**")
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                bull_thresh = st.slider("Bullish Threshold", 0.1, 0.8,
+                                       float(settings.get("sentiment_bullish_threshold", 0.3)), 0.05)
+            with sc2:
+                bear_thresh = st.slider("Bearish Threshold", -0.8, -0.1,
+                                       float(settings.get("sentiment_bearish_threshold", -0.3)), 0.05)
+            with sc3:
+                min_conf = st.slider("Min Confidence (%)", 10, 90,
+                                    int(settings.get("signal_confidence_min", 40)))
+
+            scan_int = st.number_input("Scan Interval (seconds)",
+                                      value=int(settings.get("scan_interval_seconds", 600)), step=60)
+
+            if st.form_submit_button("💾 Save", use_container_width=True, type="primary"):
+                stock_save_settings({
+                    "sentiment_bullish_threshold": bull_thresh,
+                    "sentiment_bearish_threshold": bear_thresh,
+                    "signal_confidence_min": min_conf,
+                    "scan_interval_seconds": scan_int,
+                    "bot_status": settings.get("bot_status", "PAUSED"),
+                    "watchlist": settings.get("watchlist", "AAPL,TSLA,NVDA"),
+                })
+                st.success("Settings saved!")
+                st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
