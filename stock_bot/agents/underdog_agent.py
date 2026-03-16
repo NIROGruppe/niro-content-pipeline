@@ -8,8 +8,6 @@ import concurrent.futures
 from collections import Counter
 from datetime import datetime
 
-from trading_bot.config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
-from trading_bot.utils.scraper import search_reddit, search_rss
 from stock_bot.config import ANTHROPIC_API_KEY
 from stock_bot.db.database import insert_underdog, log_event
 
@@ -45,6 +43,9 @@ def extract_tickers_from_text(text: str) -> list:
 
 def scan_reddit_for_tickers() -> Counter:
     """Scan Reddit subreddits for trending ticker mentions."""
+    from trading_bot.config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
+    from trading_bot.utils.scraper import search_reddit, search_rss
+
     ticker_counts = Counter()
     all_posts = []
 

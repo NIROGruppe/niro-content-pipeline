@@ -3,8 +3,6 @@ News Agent — scans Twitter, Reddit, RSS for stock sentiment.
 Reuses scrapers from trading_bot.
 """
 import concurrent.futures
-from trading_bot.config import TWITTER_BEARER_TOKEN, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
-from trading_bot.utils.scraper import search_twitter, search_reddit, search_rss
 from stock_bot.utils.sentiment import analyze_stock_sentiment
 from stock_bot.db.database import insert_sentiment, log_event
 
@@ -18,6 +16,9 @@ STOCK_RSS_FEEDS = [
 
 def scan_ticker(ticker: str, company_name: str = "") -> dict:
     """Scan news/social for a single ticker. Returns sentiment result."""
+    from trading_bot.config import TWITTER_BEARER_TOKEN, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
+    from trading_bot.utils.scraper import search_twitter, search_reddit, search_rss
+
     query = f"${ticker}" if not company_name else f"${ticker} {company_name}"
     query_stock = f"{ticker} stock"
 

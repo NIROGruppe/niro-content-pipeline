@@ -6,11 +6,6 @@ import threading
 
 from stock_bot.config import load_settings, save_settings
 from stock_bot.db.database import init_db, log_event, get_watchlist, get_open_trades
-from stock_bot.agents.news_agent import scan_ticker
-from stock_bot.agents.signal_agent import generate_signal
-from stock_bot.agents.postmortem_agent import run_postmortem
-from stock_bot.agents.underdog_agent import run_underdog_scan as _underdog_scan
-from stock_bot.utils.price_api import get_current_price, get_price_history, calculate_technicals
 from stock_bot.db.database import close_trade as db_close_trade
 
 _bot_thread = None
@@ -19,6 +14,10 @@ _bot_running = False
 
 def run_scan_once():
     """Run a full scan cycle: prices → news → signals."""
+    from stock_bot.agents.news_agent import scan_ticker
+    from stock_bot.agents.signal_agent import generate_signal
+    from stock_bot.utils.price_api import get_current_price, get_price_history, calculate_technicals
+
     settings = load_settings()
     log_event("INFO", "orchestrator", "Scan cycle started")
 
@@ -78,6 +77,8 @@ def run_scan_once():
 
 def run_underdog_scan() -> list:
     """Run the underdog scanner independently."""
+    from stock_bot.agents.underdog_agent import run_underdog_scan as _underdog_scan
+
     log_event("INFO", "orchestrator", "Starting underdog scan...")
     try:
         results = _underdog_scan()
@@ -102,6 +103,7 @@ def close_trade_with_postmortem(trade_id: int, exit_price: float) -> dict:
         log_event("INFO", "orchestrator",
                   f"Loss detected on {trade['ticker']}. Running postmortem...")
         trade["id"] = trade_id
+        from stock_bot.agents.postmortem_agent import run_postmortem
         run_postmortem(trade)
 
     return trade
