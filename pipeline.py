@@ -243,18 +243,113 @@ WICHTIG:
         error_detail = " | ".join(errors) if errors else "Keine Antwort erhalten"
         raise ValueError(f"Content-Plan Generierung fehlgeschlagen: {error_detail}")
 
+    raw_text = _extract_json_text(raw_text)
+
+    # Try parsing as-is
     try:
-        if "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        result = json.loads(raw_text.strip())
+        result = json.loads(raw_text)
         if isinstance(result, list):
             return result
     except json.JSONDecodeError:
         pass
 
-    raise ValueError(f"Content-Plan JSON konnte nicht geparst werden. Antwort: {raw_text[:200]}")
+    # Try to repair truncated JSON — find last complete object
+    repaired = _repair_truncated_json_array(raw_text)
+    if repaired:
+        return repaired
+
+    raise ValueError(f"Content-Plan JSON konnte nicht geparst werden. Antwort: {raw_text[:300]}")
+
+
+def _extract_json_text(raw_text: str) -> str:
+    """Extract JSON from markdown code blocks and fix common issues."""
+    text = raw_text.strip()
+    if "```" in text:
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        if "```" in text:
+            text = text.split("```")[0]
+    text = text.strip()
+
+    # Fix unescaped newlines inside JSON string values
+    # This handles cases where Claude puts actual \n in captions
+    text = _fix_json_newlines(text)
+    return text
+
+
+def _fix_json_newlines(text: str) -> str:
+    """Replace raw newlines inside JSON string values with \\n."""
+    result = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            result.append(ch)
+            escape = False
+            continue
+        if ch == '\\':
+            result.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch == '\n':
+            result.append('\\n')
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+
+def _repair_truncated_json_array(text: str) -> list:
+    """Try to salvage a truncated JSON array by finding the last complete object."""
+    text = text.strip()
+    if not text.startswith("["):
+        return []
+
+    # Find positions of all complete objects (closing "}")
+    last_complete = -1
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                last_complete = i
+
+    if last_complete <= 0:
+        return []
+
+    # Cut after last complete object and close the array
+    truncated = text[:last_complete + 1].rstrip().rstrip(",")
+    truncated = truncated + "\n]"
+
+    try:
+        result = json.loads(truncated)
+        if isinstance(result, list) and len(result) > 0:
+            print(f"  JSON repariert: {len(result)} Posts aus abgeschnittener Antwort gerettet")
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    return []
 
 
 def _call_langdock(prompt: str) -> str:
@@ -311,10 +406,14 @@ def _call_claude(prompt: str) -> str:
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
-        max_tokens=8192,
+        max_tokens=16384,
         messages=[{"role": "user", "content": prompt}]
     ) as stream:
         response = stream.get_final_message()
+
+    # If output was truncated, the JSON will be incomplete
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError("Claude: Antwort wurde abgeschnitten (max_tokens erreicht)")
 
     for block in response.content:
         if block.type == "text":
