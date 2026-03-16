@@ -157,17 +157,41 @@ def get_watchlist() -> list:
 
 def insert_sentiment(data: dict):
     conn = _conn()
-    conn.execute(
-        "INSERT INTO sentiment_scans (ticker, sentiment_score, confidence, dominant_narrative, "
-        "bullish_signals, bearish_signals, source_count, source_quality, scanned_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            data["ticker"], data.get("sentiment_score", 0), data.get("confidence", 0),
-            data.get("dominant_narrative", ""), json.dumps(data.get("bullish_signals", [])),
-            json.dumps(data.get("bearish_signals", [])), data.get("source_count", 0),
-            data.get("source_quality", "low"), datetime.now().isoformat()
+    today = date.today().isoformat()
+    ticker = data["ticker"]
+
+    # Check if this ticker already has a sentiment scan today → update instead
+    existing = conn.execute(
+        "SELECT id FROM sentiment_scans WHERE ticker = ? AND scanned_at >= ?",
+        (ticker, today)
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            "UPDATE sentiment_scans SET sentiment_score=?, confidence=?, "
+            "dominant_narrative=?, bullish_signals=?, bearish_signals=?, "
+            "source_count=?, source_quality=?, scanned_at=? WHERE id=?",
+            (
+                data.get("sentiment_score", 0), data.get("confidence", 0),
+                data.get("dominant_narrative", ""), json.dumps(data.get("bullish_signals", [])),
+                json.dumps(data.get("bearish_signals", [])), data.get("source_count", 0),
+                data.get("source_quality", "low"), datetime.now().isoformat(),
+                existing["id"]
+            )
         )
-    )
+    else:
+        conn.execute(
+            "INSERT INTO sentiment_scans (ticker, sentiment_score, confidence, dominant_narrative, "
+            "bullish_signals, bearish_signals, source_count, source_quality, scanned_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker, data.get("sentiment_score", 0), data.get("confidence", 0),
+                data.get("dominant_narrative", ""), json.dumps(data.get("bullish_signals", [])),
+                json.dumps(data.get("bearish_signals", [])), data.get("source_count", 0),
+                data.get("source_quality", "low"), datetime.now().isoformat()
+            )
+        )
+
     conn.commit()
     conn.close()
 
@@ -197,20 +221,46 @@ def get_all_latest_sentiments() -> list:
 
 def insert_signal(data: dict) -> int:
     conn = _conn()
-    cur = conn.execute(
-        "INSERT INTO signals (ticker, direction, strength, sentiment_score, price_at_signal, "
-        "reasoning, position_type, hold_duration, check_interval, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            data["ticker"], data["direction"], data.get("strength", "MODERATE"),
-            data.get("sentiment_score", 0), data.get("price_at_signal", 0),
-            data.get("reasoning", ""), data.get("position_type", ""),
-            data.get("hold_duration", ""), data.get("check_interval", ""),
-            datetime.now().isoformat()
+    today = date.today().isoformat()
+    ticker = data["ticker"]
+
+    # Check if this ticker already has a signal today → update instead
+    existing = conn.execute(
+        "SELECT id FROM signals WHERE ticker = ? AND created_at >= ?",
+        (ticker, today)
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            "UPDATE signals SET direction=?, strength=?, sentiment_score=?, "
+            "price_at_signal=?, reasoning=?, position_type=?, hold_duration=?, "
+            "check_interval=?, created_at=? WHERE id=?",
+            (
+                data["direction"], data.get("strength", "MODERATE"),
+                data.get("sentiment_score", 0), data.get("price_at_signal", 0),
+                data.get("reasoning", ""), data.get("position_type", ""),
+                data.get("hold_duration", ""), data.get("check_interval", ""),
+                datetime.now().isoformat(), existing["id"]
+            )
         )
-    )
-    conn.commit()
-    signal_id = cur.lastrowid
+        conn.commit()
+        signal_id = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO signals (ticker, direction, strength, sentiment_score, price_at_signal, "
+            "reasoning, position_type, hold_duration, check_interval, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker, data["direction"], data.get("strength", "MODERATE"),
+                data.get("sentiment_score", 0), data.get("price_at_signal", 0),
+                data.get("reasoning", ""), data.get("position_type", ""),
+                data.get("hold_duration", ""), data.get("check_interval", ""),
+                datetime.now().isoformat()
+            )
+        )
+        conn.commit()
+        signal_id = cur.lastrowid
+
     conn.close()
     return signal_id
 
@@ -335,23 +385,52 @@ def get_postmortems(limit: int = 50) -> list:
 
 def insert_underdog(data: dict) -> int:
     conn = _conn()
-    cur = conn.execute(
-        "INSERT INTO underdogs (ticker, name, market_cap, price, volume_ratio, "
-        "reddit_mentions, sentiment_score, catalyst, score, source, "
-        "position_type, hold_duration, check_interval, discovered_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            data["ticker"], data.get("name", ""), data.get("market_cap", 0),
-            data.get("price", 0), data.get("volume_ratio", 1.0),
-            data.get("reddit_mentions", 0), data.get("sentiment_score", 0),
-            data.get("catalyst", ""), data.get("score", 0),
-            data.get("source", ""), data.get("position_type", ""),
-            data.get("hold_duration", ""), data.get("check_interval", ""),
-            datetime.now().isoformat()
+    today = date.today().isoformat()
+    ticker = data["ticker"]
+
+    # Check if this ticker was already discovered today → update instead
+    existing = conn.execute(
+        "SELECT id FROM underdogs WHERE ticker = ? AND discovered_at >= ?",
+        (ticker, today)
+    ).fetchone()
+
+    if existing:
+        conn.execute(
+            "UPDATE underdogs SET name=?, market_cap=?, price=?, volume_ratio=?, "
+            "reddit_mentions=?, sentiment_score=?, catalyst=?, score=?, source=?, "
+            "position_type=?, hold_duration=?, check_interval=?, discovered_at=? "
+            "WHERE id=?",
+            (
+                data.get("name", ""), data.get("market_cap", 0),
+                data.get("price", 0), data.get("volume_ratio", 1.0),
+                data.get("reddit_mentions", 0), data.get("sentiment_score", 0),
+                data.get("catalyst", ""), data.get("score", 0),
+                data.get("source", ""), data.get("position_type", ""),
+                data.get("hold_duration", ""), data.get("check_interval", ""),
+                datetime.now().isoformat(), existing["id"]
+            )
         )
-    )
-    conn.commit()
-    underdog_id = cur.lastrowid
+        conn.commit()
+        underdog_id = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO underdogs (ticker, name, market_cap, price, volume_ratio, "
+            "reddit_mentions, sentiment_score, catalyst, score, source, "
+            "position_type, hold_duration, check_interval, discovered_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker, data.get("name", ""), data.get("market_cap", 0),
+                data.get("price", 0), data.get("volume_ratio", 1.0),
+                data.get("reddit_mentions", 0), data.get("sentiment_score", 0),
+                data.get("catalyst", ""), data.get("score", 0),
+                data.get("source", ""), data.get("position_type", ""),
+                data.get("hold_duration", ""), data.get("check_interval", ""),
+                datetime.now().isoformat()
+            )
+        )
+        conn.commit()
+        underdog_id = cur.lastrowid
+
     conn.close()
     return underdog_id
 
