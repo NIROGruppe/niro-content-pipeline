@@ -1,6 +1,6 @@
 """
 Underdog Scanner Agent — discovers under-the-radar stocks with momentum.
-Scans Reddit for trending tickers, checks unusual volume, filters small/mid cap.
+Multi-source: volume screener (yfinance), RSS news scanning, Reddit fallback.
 """
 import re
 import json
@@ -12,11 +12,10 @@ from stock_bot.config import ANTHROPIC_API_KEY
 from stock_bot.db.database import insert_underdog, log_event
 
 
-# Subreddits to scan for ticker mentions
-REDDIT_SUBREDDITS = ["wallstreetbets", "stocks", "pennystocks", "smallstreetbets", "investing"]
-
 # Regex to extract $TICKER mentions (1-5 uppercase letters after $)
 TICKER_PATTERN = re.compile(r'\$([A-Z]{1,5})\b')
+# Also match bare uppercase tickers in context like "buying PLTR" or "long SOFI"
+BARE_TICKER_PATTERN = re.compile(r'\b(long|short|buying|selling|calls?|puts?|bullish|bearish)\s+([A-Z]{2,5})\b', re.IGNORECASE)
 
 # Common words that look like tickers but aren't
 TICKER_BLACKLIST = {
@@ -26,56 +25,157 @@ TICKER_BLACKLIST = {
     "GDP", "IMO", "LOL", "OMG", "USA", "LLC", "INC", "THE", "FOR", "ARE",
     "NOT", "ALL", "CAN", "HAD", "HAS", "HER", "HIM", "HIS", "HOW", "ITS",
     "LET", "MAY", "NEW", "NOW", "OLD", "OUR", "OUT", "OWN", "SAY", "SHE",
-    "TOO", "USE", "WAY", "WHO", "BOY", "DID", "GET", "HAS", "HIM",
-    "PUT", "RUN", "SAW", "TOP", "TEN", "BIG", "RED", "ANY", "DAY",
+    "TOO", "USE", "WAY", "WHO", "BOY", "DID", "GET", "PUT", "RUN", "SAW",
+    "TOP", "TEN", "BIG", "RED", "ANY", "DAY", "LONG", "SHORT", "CALL",
+    "CALLS", "HOLD", "BUY", "SELL", "HIGH", "LOW", "YOLO", "MOON", "PUMP",
 }
 
+# Small/mid cap candidate universe — popular small/mid caps that could be underdogs
+# These are scanned for unusual volume directly via yfinance
+SCAN_UNIVERSE = [
+    # High-growth small-mid caps
+    "PLTR", "SOFI", "HOOD", "RKLB", "IONQ", "JOBY", "AFRM",
+    "UPST", "DOCS", "OPEN", "LMND",
+    # Small/Mid cap tech
+    "ASTS", "LUNR", "RDW", "MNDY", "GTLB", "BRZE", "CFLT",
+    "DUOL", "CWAN", "TOST", "GRAB", "SE",
+    # Biotech / Healthcare
+    "NNOX", "GDRX", "HIMS", "ACHR", "ARQT", "RXRX", "DNA",
+    # Energy / Clean tech
+    "PLUG", "FCEL", "BLNK", "CHPT", "QS", "ENPH", "SEDG", "RUN",
+    # High retail interest
+    "BB", "NOK", "SPCE", "LCID", "RIVN", "NIO", "XPEV", "LI",
+    # Fintech / Crypto-adjacent
+    "NU", "COIN", "MARA", "RIOT", "CLSK", "BITF", "HUT", "CORZ",
+    # Small industrials / Materials / Space
+    "MP", "LAC", "ALB", "IRDM", "BWXT",
+    # Additional growth
+    "PATH", "AI", "DDOG", "NET", "CRWD", "ZS", "BILL", "FRSH", "GLBE",
+    # EU / German stocks
+    "SAP", "SIE.DE", "IFX.DE", "DTE.DE", "BAS.DE",
+    # Recent momentum names
+    "SMCI", "ARM", "RDDT", "BIRK", "CART", "CAVA", "DJT",
+    "OKLO", "VST", "VIAV", "SOUN", "GSAT",
+]
+
 # Market cap filter range
-MIN_MARKET_CAP = 500_000_000    # $500M
-MAX_MARKET_CAP = 10_000_000_000  # $10B
+MIN_MARKET_CAP = 300_000_000     # $300M
+MAX_MARKET_CAP = 15_000_000_000  # $15B
 
 
 def extract_tickers_from_text(text: str) -> list:
-    """Extract $TICKER mentions from text."""
+    """Extract ticker mentions from text — both $TICKER and contextual bare tickers."""
+    tickers = []
+    # $TICKER pattern
     found = TICKER_PATTERN.findall(text)
-    return [t for t in found if t not in TICKER_BLACKLIST]
+    tickers.extend(t for t in found if t not in TICKER_BLACKLIST)
+    # Contextual bare tickers ("buying PLTR", "long SOFI")
+    bare = BARE_TICKER_PATTERN.findall(text)
+    tickers.extend(t[1] for t in bare if t[1] not in TICKER_BLACKLIST)
+    return tickers
 
 
-def scan_reddit_for_tickers() -> Counter:
-    """Scan Reddit subreddits for trending ticker mentions."""
-    from trading_bot.config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
-    from trading_bot.utils.scraper import search_reddit, search_rss
+def scan_volume_movers() -> list:
+    """Scan universe for unusual volume via yfinance. Primary discovery method."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        log_event("ERROR", "underdog_agent", "yfinance not installed")
+        return []
 
+    log_event("INFO", "underdog_agent", f"Volume scanning {len(SCAN_UNIVERSE)} stocks...")
+
+    results = []
+
+    def check_ticker(ticker):
+        try:
+            t = yf.Ticker(ticker)
+            info = t.info or {}
+            fast = t.fast_info
+
+            price = getattr(fast, "last_price", None) or info.get("currentPrice", 0)
+            market_cap = info.get("marketCap", 0)
+            volume = info.get("volume", 0)
+            avg_volume = info.get("averageVolume", 0) or info.get("averageDailyVolume10Day", 0)
+            name = info.get("shortName", ticker)
+
+            if not price or not market_cap:
+                return None
+
+            # Market cap filter
+            if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
+                return None
+
+            volume_ratio = round(volume / avg_volume, 2) if avg_volume and avg_volume > 0 else 1.0
+
+            # Only keep stocks with notable volume (>1.2x avg)
+            if volume_ratio < 1.2:
+                return None
+
+            return {
+                "ticker": ticker,
+                "name": name,
+                "price": round(price, 2) if price else 0,
+                "market_cap": market_cap,
+                "volume": volume or 0,
+                "avg_volume": avg_volume or 0,
+                "volume_ratio": volume_ratio,
+                "sector": info.get("sector", ""),
+                "industry": info.get("industry", ""),
+            }
+        except Exception:
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(check_ticker, t): t for t in SCAN_UNIVERSE}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception:
+                pass
+
+    log_event("INFO", "underdog_agent",
+              f"Volume scan found {len(results)} stocks with unusual volume")
+    return results
+
+
+def scan_rss_for_tickers() -> Counter:
+    """Scan financial RSS feeds for trending ticker mentions."""
     ticker_counts = Counter()
+
+    try:
+        from trading_bot.utils.scraper import search_rss
+    except ImportError:
+        log_event("WARN", "underdog_agent", "scraper import failed, skipping RSS")
+        return ticker_counts
+
+    rss_feeds = [
+        "https://www.reddit.com/r/wallstreetbets/hot.rss",
+        "https://www.reddit.com/r/stocks/hot.rss",
+        "https://www.reddit.com/r/pennystocks/hot.rss",
+        "https://www.reddit.com/r/smallstreetbets/hot.rss",
+        "https://news.google.com/rss/search?q=stock+momentum+small+cap&hl=en-US",
+        "https://news.google.com/rss/search?q=undervalued+stocks&hl=en-US",
+    ]
+
+    log_event("INFO", "underdog_agent", "Scanning RSS feeds for ticker mentions...")
+
     all_posts = []
-
-    log_event("INFO", "underdog_agent", "Scanning Reddit for ticker mentions...")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {}
-        for sub in REDDIT_SUBREDDITS:
-            query = "stock OR stocks OR ticker OR $"
-            future = executor.submit(
-                search_reddit, query, 25,
-                REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
-            )
-            futures[future] = sub
-
-        # Also scan specific subreddit RSS feeds
-        for sub in REDDIT_SUBREDDITS:
-            rss_url = f"https://www.reddit.com/r/{sub}/hot.rss"
-            future = executor.submit(search_rss, sub, [rss_url], 25)
-            futures[future] = f"{sub}_rss"
+        for feed_url in rss_feeds:
+            future = executor.submit(search_rss, "stocks", [feed_url], 25)
+            futures[future] = feed_url
 
         for future in concurrent.futures.as_completed(futures):
-            sub = futures[future]
             try:
                 posts = future.result()
                 all_posts.extend(posts)
-            except Exception as e:
-                log_event("WARN", "underdog_agent", f"Failed scanning {sub}: {e}")
+            except Exception:
+                pass
 
-    # Extract tickers from all posts
     for post in all_posts:
         if post.get("error"):
             continue
@@ -85,134 +185,69 @@ def scan_reddit_for_tickers() -> Counter:
             ticker_counts[t] += 1
 
     log_event("INFO", "underdog_agent",
-              f"Found {len(ticker_counts)} unique tickers in {len(all_posts)} posts")
-
+              f"RSS scan found {len(ticker_counts)} tickers in {len(all_posts)} posts")
     return ticker_counts
 
 
-def get_stock_data(ticker: str) -> dict:
-    """Get price, volume, market cap data via yfinance."""
-    try:
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        info = t.info or {}
-        fast = t.fast_info
+def score_underdogs(volume_movers: list, rss_mentions: Counter) -> list:
+    """Score and rank underdog candidates from multiple sources."""
+    scored = []
 
-        price = getattr(fast, "last_price", None) or info.get("currentPrice", 0)
-        market_cap = info.get("marketCap", 0)
-        volume = info.get("volume", 0)
-        avg_volume = info.get("averageVolume", 0) or info.get("averageDailyVolume10Day", 0)
-        name = info.get("shortName", ticker)
+    for stock in volume_movers:
+        ticker = stock["ticker"]
+        volume_ratio = stock.get("volume_ratio", 1.0)
+        market_cap = stock.get("market_cap", 0)
+        mentions = rss_mentions.get(ticker, 0)
 
-        # Calculate volume ratio
-        volume_ratio = round(volume / avg_volume, 2) if avg_volume and avg_volume > 0 else 1.0
+        # Volume score (max 50 pts) — primary signal
+        volume_score = min(volume_ratio / 4.0, 1.0) * 50
 
-        return {
-            "ticker": ticker,
-            "name": name,
-            "price": round(price, 2) if price else 0,
-            "market_cap": market_cap or 0,
-            "volume": volume or 0,
-            "avg_volume": avg_volume or 0,
-            "volume_ratio": volume_ratio,
-            "sector": info.get("sector", ""),
-            "industry": info.get("industry", ""),
-            "error": None,
-        }
-    except Exception as e:
-        return {"ticker": ticker, "error": str(e)}
+        # Mention score (max 20 pts) — social confirmation
+        mention_score = min(mentions / 5.0, 1.0) * 20
 
+        # Market cap sweetspot score (max 30 pts)
+        cap_billions = market_cap / 1e9
+        if 1 <= cap_billions <= 5:
+            cap_score = 30
+        elif 0.5 <= cap_billions <= 8:
+            cap_score = 20
+        else:
+            cap_score = 10
 
-def filter_underdogs(ticker_counts: Counter, min_mentions: int = 2) -> list:
-    """Filter tickers by market cap, volume, and minimum mentions."""
-    # Only consider tickers with enough mentions
-    candidates = [(t, c) for t, c in ticker_counts.items() if c >= min_mentions]
-    candidates.sort(key=lambda x: x[1], reverse=True)
+        composite_score = round(volume_score + mention_score + cap_score, 1)
 
-    # Take top 30 to avoid too many API calls
-    candidates = candidates[:30]
+        scored.append({
+            **stock,
+            "reddit_mentions": mentions,
+            "score": composite_score,
+        })
 
-    if not candidates:
-        log_event("INFO", "underdog_agent", "No candidates with sufficient mentions")
-        return []
-
-    log_event("INFO", "underdog_agent",
-              f"Checking {len(candidates)} candidates for market cap & volume...")
-
-    # Fetch stock data in parallel
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(get_stock_data, ticker): (ticker, count)
-            for ticker, count in candidates
-        }
-        for future in concurrent.futures.as_completed(futures):
-            ticker, mention_count = futures[future]
-            try:
-                data = future.result()
-                if data.get("error"):
-                    continue
-
-                market_cap = data.get("market_cap", 0)
-                volume_ratio = data.get("volume_ratio", 1.0)
-
-                # Filter: small/mid cap only
-                if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
-                    continue
-
-                # Calculate composite underdog score (0-100)
-                # Factors: reddit mentions, volume ratio, market cap sweetspot
-                mention_score = min(mention_count / 10.0, 1.0) * 30  # max 30 pts
-                volume_score = min(volume_ratio / 5.0, 1.0) * 40     # max 40 pts (3-5x = high)
-                # Mid-range market cap bonus (sweet spot around $2-5B)
-                cap_billions = market_cap / 1e9
-                if 2 <= cap_billions <= 5:
-                    cap_score = 30
-                elif 1 <= cap_billions <= 7:
-                    cap_score = 20
-                else:
-                    cap_score = 10
-
-                composite_score = round(mention_score + volume_score + cap_score, 1)
-
-                results.append({
-                    "ticker": ticker,
-                    "name": data.get("name", ticker),
-                    "market_cap": market_cap,
-                    "price": data.get("price", 0),
-                    "volume_ratio": volume_ratio,
-                    "reddit_mentions": mention_count,
-                    "score": composite_score,
-                    "sector": data.get("sector", ""),
-                    "industry": data.get("industry", ""),
-                })
-            except Exception as e:
-                log_event("WARN", "underdog_agent", f"Error processing {ticker}: {e}")
-
-    # Sort by score
-    results.sort(key=lambda x: x["score"], reverse=True)
-    log_event("INFO", "underdog_agent",
-              f"Found {len(results)} underdogs passing filters")
-    return results
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored
 
 
 def analyze_underdogs_with_claude(underdogs: list) -> list:
     """Use Claude to analyze top underdog candidates and add catalyst/reasoning."""
     if not ANTHROPIC_API_KEY or not underdogs:
+        for u in underdogs:
+            u.setdefault("sentiment_score", 0)
+            u.setdefault("catalyst", "No API key — manual review needed")
+            u.setdefault("is_genuine", True)
         return underdogs
 
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    # Prepare summary of candidates
     candidates_text = ""
     for i, u in enumerate(underdogs[:10]):
         cap_b = u["market_cap"] / 1e9
         candidates_text += (
             f"\n{i+1}. {u['ticker']} ({u['name']})\n"
             f"   Market Cap: ${cap_b:.1f}B | Price: ${u['price']:.2f}\n"
-            f"   Volume Ratio: {u['volume_ratio']:.1f}x normal | Reddit Mentions: {u['reddit_mentions']}\n"
-            f"   Sector: {u.get('sector', 'N/A')} | Composite Score: {u['score']}\n"
+            f"   Volume Ratio: {u['volume_ratio']:.1f}x normal"
+            + (f" | Reddit/RSS Mentions: {u['reddit_mentions']}" if u.get('reddit_mentions') else "")
+            + "\n"
+            f"   Sector: {u.get('sector', 'N/A')} | Score: {u['score']}\n"
         )
 
     try:
@@ -223,12 +258,12 @@ def analyze_underdogs_with_claude(underdogs: list) -> list:
                 "role": "user",
                 "content": f"""You are a stock analyst specializing in finding underdog stocks — small/mid-cap stocks flying under the radar but showing momentum signals.
 
-Analyze these candidates that were found by scanning Reddit mentions and unusual volume:
+These stocks were flagged for having unusual trading volume today:
 
 {candidates_text}
 
 For each stock, provide:
-1. A sentiment score (-1.0 to 1.0) based on what you know about the company
+1. A sentiment score (-1.0 to 1.0) based on current outlook
 2. A short catalyst/reason why this stock could be interesting (1-2 sentences)
 3. Whether this is a genuine underdog opportunity or just noise
 
@@ -259,7 +294,6 @@ Include ALL candidates from the list above."""
 
         analysis = json.loads(raw.strip())
 
-        # Merge Claude analysis into underdog data
         analysis_map = {a["ticker"]: a for a in analysis}
         for u in underdogs:
             if u["ticker"] in analysis_map:
@@ -285,27 +319,40 @@ Include ALL candidates from the list above."""
 
 
 def run_underdog_scan() -> list:
-    """Full underdog scan pipeline: Reddit -> filter -> Claude analysis -> DB."""
+    """Full underdog scan pipeline: volume screen + RSS → score → Claude → DB."""
     log_event("INFO", "underdog_agent", "=== Underdog scan started ===")
 
-    # Step 1: Scan Reddit for ticker mentions
-    ticker_counts = scan_reddit_for_tickers()
+    # Step 1: Volume screener (primary — always works)
+    volume_movers = scan_volume_movers()
 
-    if not ticker_counts:
-        log_event("INFO", "underdog_agent", "No tickers found on Reddit")
+    # Step 2: RSS scan for social mentions (secondary — best effort)
+    rss_mentions = Counter()
+    try:
+        rss_mentions = scan_rss_for_tickers()
+    except Exception as e:
+        log_event("WARN", "underdog_agent", f"RSS scan failed: {e}")
+
+    if not volume_movers:
+        log_event("INFO", "underdog_agent", "No stocks with unusual volume found")
         return []
 
-    # Step 2: Filter by market cap, volume, score
-    underdogs = filter_underdogs(ticker_counts, min_mentions=2)
+    # Step 3: Score and rank
+    underdogs = score_underdogs(volume_movers, rss_mentions)
+
+    # Keep top 15
+    underdogs = underdogs[:15]
+
+    log_event("INFO", "underdog_agent",
+              f"Scored {len(underdogs)} underdogs, top: {', '.join(u['ticker'] for u in underdogs[:5])}")
 
     if not underdogs:
         log_event("INFO", "underdog_agent", "No stocks passed underdog filters")
         return []
 
-    # Step 3: Claude analysis for catalyst and sentiment
+    # Step 4: Claude analysis for catalyst and sentiment
     underdogs = analyze_underdogs_with_claude(underdogs)
 
-    # Step 4: Store in database
+    # Step 5: Store in database
     stored = 0
     for u in underdogs:
         if not u.get("is_genuine", True):
@@ -321,7 +368,7 @@ def run_underdog_scan() -> list:
                 "sentiment_score": u.get("sentiment_score", 0),
                 "catalyst": u.get("catalyst", ""),
                 "score": u.get("score", 0),
-                "source": "reddit+volume",
+                "source": "volume+rss",
             })
             stored += 1
         except Exception as e:
