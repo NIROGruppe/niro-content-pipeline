@@ -47,6 +47,9 @@ def init_db():
             sentiment_score REAL,
             price_at_signal REAL,
             reasoning TEXT,
+            position_type TEXT DEFAULT '',
+            hold_duration TEXT DEFAULT '',
+            check_interval TEXT DEFAULT '',
             created_at TEXT
         );
 
@@ -106,6 +109,19 @@ def init_db():
             discovered_at TEXT
         );
     """)
+    # Migrate: add new columns if missing
+    for table, col, coltype in [
+        ("signals", "position_type", "TEXT DEFAULT ''"),
+        ("signals", "hold_duration", "TEXT DEFAULT ''"),
+        ("signals", "check_interval", "TEXT DEFAULT ''"),
+        ("underdogs", "position_type", "TEXT DEFAULT ''"),
+        ("underdogs", "hold_duration", "TEXT DEFAULT ''"),
+        ("underdogs", "check_interval", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -183,11 +199,14 @@ def insert_signal(data: dict) -> int:
     conn = _conn()
     cur = conn.execute(
         "INSERT INTO signals (ticker, direction, strength, sentiment_score, price_at_signal, "
-        "reasoning, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "reasoning, position_type, hold_duration, check_interval, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             data["ticker"], data["direction"], data.get("strength", "MODERATE"),
             data.get("sentiment_score", 0), data.get("price_at_signal", 0),
-            data.get("reasoning", ""), datetime.now().isoformat()
+            data.get("reasoning", ""), data.get("position_type", ""),
+            data.get("hold_duration", ""), data.get("check_interval", ""),
+            datetime.now().isoformat()
         )
     )
     conn.commit()
@@ -318,14 +337,17 @@ def insert_underdog(data: dict) -> int:
     conn = _conn()
     cur = conn.execute(
         "INSERT INTO underdogs (ticker, name, market_cap, price, volume_ratio, "
-        "reddit_mentions, sentiment_score, catalyst, score, source, discovered_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "reddit_mentions, sentiment_score, catalyst, score, source, "
+        "position_type, hold_duration, check_interval, discovered_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             data["ticker"], data.get("name", ""), data.get("market_cap", 0),
             data.get("price", 0), data.get("volume_ratio", 1.0),
             data.get("reddit_mentions", 0), data.get("sentiment_score", 0),
             data.get("catalyst", ""), data.get("score", 0),
-            data.get("source", ""), datetime.now().isoformat()
+            data.get("source", ""), data.get("position_type", ""),
+            data.get("hold_duration", ""), data.get("check_interval", ""),
+            datetime.now().isoformat()
         )
     )
     conn.commit()

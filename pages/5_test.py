@@ -683,6 +683,23 @@ def render_stock_bot():
                 emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}.get(d, "⚪")
                 strength_color = {"STRONG": "#2ecc71", "MODERATE": "#f39c12", "WEAK": "#888"}.get(s.get("strength", ""), "#888")
 
+                pos = s.get("position_type", "")
+                hold = s.get("hold_duration", "")
+                chk = s.get("check_interval", "")
+                pos_color = "#2ecc71" if "LONG" in (pos or "") else "#e74c3c" if "SHORT" in (pos or "") else "#888"
+
+                detail_row = ""
+                if pos and pos != "—":
+                    detail_row = (
+                        f'<div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">'
+                        f'<span style="font-size:12px;"><span style="color:{pos_color};font-weight:700;">{pos}</span></span>'
+                    )
+                    if hold and hold != "—":
+                        detail_row += f'<span style="font-size:12px;color:#888;">⏱ {hold}</span>'
+                    if chk and chk != "—":
+                        detail_row += f'<span style="font-size:12px;color:#888;">👁 {chk}</span>'
+                    detail_row += '</div>'
+
                 st.markdown(
                     f'<div style="background:#1e1e1e;border-left:4px solid {strength_color};'
                     f'border-radius:8px;padding:12px 16px;margin-bottom:8px;">'
@@ -690,7 +707,8 @@ def render_stock_bot():
                     f'<div><b>{s.get("ticker", "?")}</b> {emoji} <b>{d}</b> '
                     f'<span style="color:{strength_color};">({s.get("strength", "?")})</span></div>'
                     f'<div style="color:#888;">@ ${s.get("price_at_signal", 0):.2f}</div></div>'
-                    f'<div style="font-size:12px;color:#666;margin-top:4px;">{s.get("reasoning", "")[:120]}</div>'
+                    + detail_row
+                    + f'<div style="font-size:12px;color:#666;margin-top:4px;">{s.get("reasoning", "")[:150]}</div>'
                     f'<div style="font-size:11px;color:#555;margin-top:2px;">{s.get("created_at", "")[:19]}</div>'
                     f'</div>',
                     unsafe_allow_html=True
@@ -733,8 +751,18 @@ def render_stock_bot():
         all_signals = get_signals(50)
         if all_signals:
             import pandas as pd
-            df = pd.DataFrame(all_signals)[["ticker", "direction", "strength", "sentiment_score", "price_at_signal", "reasoning", "created_at"]]
-            df.columns = ["Ticker", "Signal", "Strength", "Sentiment", "Price", "Reasoning", "Time"]
+            cols = ["ticker", "direction", "strength", "position_type", "hold_duration",
+                    "check_interval", "sentiment_score", "price_at_signal", "reasoning", "created_at"]
+            # Only use columns that exist in data
+            available = [c for c in cols if c in all_signals[0]]
+            df = pd.DataFrame(all_signals)[available]
+            col_names = {
+                "ticker": "Ticker", "direction": "Signal", "strength": "Strength",
+                "position_type": "Position", "hold_duration": "Haltedauer",
+                "check_interval": "Check-Intervall", "sentiment_score": "Sentiment",
+                "price_at_signal": "Price", "reasoning": "Reasoning", "created_at": "Time"
+            }
+            df.columns = [col_names.get(c, c) for c in available]
             st.dataframe(df, use_container_width=True, hide_index=True)
 
     # ── TAB 3: TRADE JOURNAL ──
@@ -922,6 +950,10 @@ def render_stock_bot():
                 else:
                     sent_color = "#f39c12"
 
+                ud_pos = ud.get("position_type", "") or ""
+                ud_hold = ud.get("hold_duration", "") or ""
+                ud_chk = ud.get("check_interval", "") or ""
+
                 # Volume ratio indicator
                 if vol_ratio >= 5:
                     vol_label = "🔥🔥🔥"
@@ -970,6 +1002,11 @@ def render_stock_bot():
                     f'</div>'
                     f'</div>'
                     + (f'<div style="margin-top:12px;padding:10px;background:#ffffff08;border-radius:8px;font-size:13px;color:#aaa;"><b>Catalyst:</b> {catalyst}</div>' if catalyst else '')
+                    + (('<div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;font-size:13px;">'
+                        + ('<span style="color:' + ('#2ecc71' if 'LONG' in ud_pos else '#e74c3c' if 'SHORT' in ud_pos else '#888') + ';font-weight:700;">\U0001f4ca ' + ud_pos + '</span>' if ud_pos else '')
+                        + ('<span style="color:#aaa;">\u23f1 ' + ud_hold + '</span>' if ud_hold else '')
+                        + ('<span style="color:#aaa;">\U0001f441 ' + ud_chk + '</span>' if ud_chk else '')
+                        + '</div>') if (ud_pos or ud_hold or ud_chk) else '')
                     + f'<div style="font-size:11px;color:#555;margin-top:8px;">'
                     f'Entdeckt: {ud.get("discovered_at", "")[:16]} · Quelle: {ud.get("source", "")}'
                     f'</div>'

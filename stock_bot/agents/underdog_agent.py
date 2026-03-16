@@ -233,6 +233,9 @@ def analyze_underdogs_with_claude(underdogs: list) -> list:
             u.setdefault("sentiment_score", 0)
             u.setdefault("catalyst", "No API key — manual review needed")
             u.setdefault("is_genuine", True)
+            u.setdefault("position_type", "LONG")
+            u.setdefault("hold_duration", "")
+            u.setdefault("check_interval", "")
         return underdogs
 
     import anthropic
@@ -266,6 +269,9 @@ For each stock, provide:
 1. A sentiment score (-1.0 to 1.0) based on current outlook
 2. A short catalyst/reason why this stock could be interesting (1-2 sentences)
 3. Whether this is a genuine underdog opportunity or just noise
+4. Position type: "LONG" or "SHORT"
+5. Suggested hold duration (e.g. "1-2 Wochen", "3-5 Tage", "Intraday")
+6. Price check interval (e.g. "2x taeglich", "Alle 4 Stunden", "Stuendlich")
 
 Respond with ONLY valid JSON array:
 [
@@ -273,7 +279,10 @@ Respond with ONLY valid JSON array:
         "ticker": "<TICKER>",
         "sentiment_score": <float -1.0 to 1.0>,
         "catalyst": "<1-2 sentence catalyst/reason>",
-        "is_genuine": <true/false>
+        "is_genuine": <true/false>,
+        "position_type": "LONG or SHORT",
+        "hold_duration": "<suggested hold duration>",
+        "check_interval": "<price check frequency>"
     }},
     ...
 ]
@@ -301,10 +310,16 @@ Include ALL candidates from the list above."""
                 u["sentiment_score"] = a.get("sentiment_score", 0)
                 u["catalyst"] = a.get("catalyst", "")
                 u["is_genuine"] = a.get("is_genuine", True)
+                u["position_type"] = a.get("position_type", "LONG")
+                u["hold_duration"] = a.get("hold_duration", "")
+                u["check_interval"] = a.get("check_interval", "")
             else:
                 u["sentiment_score"] = 0
                 u["catalyst"] = ""
                 u["is_genuine"] = True
+                u["position_type"] = "LONG"
+                u["hold_duration"] = ""
+                u["check_interval"] = ""
 
         log_event("INFO", "underdog_agent", "Claude analysis complete")
 
@@ -314,6 +329,9 @@ Include ALL candidates from the list above."""
             u.setdefault("sentiment_score", 0)
             u.setdefault("catalyst", "")
             u.setdefault("is_genuine", True)
+            u.setdefault("position_type", "LONG")
+            u.setdefault("hold_duration", "")
+            u.setdefault("check_interval", "")
 
     return underdogs
 
@@ -369,6 +387,9 @@ def run_underdog_scan() -> list:
                 "catalyst": u.get("catalyst", ""),
                 "score": u.get("score", 0),
                 "source": "volume+rss",
+                "position_type": u.get("position_type", ""),
+                "hold_duration": u.get("hold_duration", ""),
+                "check_interval": u.get("check_interval", ""),
             })
             stored += 1
         except Exception as e:
