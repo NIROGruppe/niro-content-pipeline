@@ -19,6 +19,7 @@ def _secret(key: str, default: str = "") -> str:
 LANGDOCK_API_KEY = _secret("LANGDOCK_API_KEY")
 LANGDOCK_AGENT_ID = _secret("LANGDOCK_AGENT_ID")
 LANGDOCK_URL = "https://api.langdock.com/agent/v1/chat/completions"
+ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
 APIFY_API_TOKEN = _secret("APIFY_API_TOKEN")
 APIFY_TIKTOK_ACTOR = "clockworks~tiktok-scraper"
 
@@ -85,56 +86,28 @@ Das JSON muss exakt diese Struktur haben:
 Content-Eintrag:
 {content_json}"""
 
-    headers = {
-        "Authorization": f"Bearer {LANGDOCK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "agentId": LANGDOCK_AGENT_ID,
-        "messages": [{"id": "msg-1", "role": "user", "parts": [{"type": "text", "text": prompt}]}],
-        "stream": False
-    }
-
-    for attempt in range(5):
-        response = requests.post(LANGDOCK_URL, headers=headers, json=payload)
-        if response.status_code == 429:
-            wait = 15 * (attempt + 1)
-            print(f"  ⏳ Rate Limit – warte {wait}s...")
-            time.sleep(wait)
-            continue
-        response.raise_for_status()
-        break
-    data = response.json()
-
-    # Antwort extrahieren
+    # Try Langdock first, fall back to Claude
     raw_text = ""
-    for msg in data.get("result", []):
-        if msg.get("role") == "assistant":
-            for part in msg.get("parts", []):
-                if isinstance(part, dict) and part.get("type") == "text":
-                    raw_text = part.get("text", "")
-                elif isinstance(part, str):
-                    raw_text = part
-            # Fallback: altes Format mit content
-            if not raw_text:
-                content = msg.get("content", [])
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        raw_text = block.get("text", "")
-                    elif isinstance(block, str):
-                        raw_text = block
+    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
+        try:
+            raw_text = _call_langdock(prompt)
+        except Exception as e:
+            print(f"  Langdock Fehler: {e} — Wechsle zu Claude...")
+
+    if not raw_text and ANTHROPIC_API_KEY:
+        try:
+            raw_text = _call_claude(prompt)
+        except Exception as e:
+            print(f"  Claude Fehler: {e}")
 
     # JSON aus Antwort parsen
     try:
-        # Falls Langdock Markdown-Codeblock zurückgibt, bereinigen
         if "```" in raw_text:
             raw_text = raw_text.split("```")[1]
             if raw_text.startswith("json"):
                 raw_text = raw_text[4:]
         return json.loads(raw_text.strip())
     except json.JSONDecodeError:
-        # Fallback falls JSON-Parsing fehlschlägt
         return {
             "mood": "Konnte nicht geparst werden",
             "colors": [{"name": "Primär", "hex": "#1a1a2e"}],
@@ -245,19 +218,61 @@ WICHTIG:
 - Tage: Montag bis Sonntag, dann wieder Montag etc.
 - Verteile Posts gleichmaessig auf die Tage"""
 
+    # Try Langdock first, fall back to Claude on error
+    raw_text = ""
+    used_fallback = False
+
+    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
+        try:
+            raw_text = _call_langdock(prompt)
+        except Exception as e:
+            print(f"  Langdock Fehler: {e}")
+            print(f"  Wechsle zu Claude API...")
+            used_fallback = True
+
+    if not raw_text and ANTHROPIC_API_KEY:
+        try:
+            raw_text = _call_claude(prompt)
+            used_fallback = True
+        except Exception as e:
+            print(f"  Claude API Fehler: {e}")
+
+    if not raw_text:
+        print(f"  Warnung: Content-Plan konnte nicht generiert werden.")
+        return []
+
+    if used_fallback:
+        print(f"  (via Claude Fallback)")
+
+    try:
+        if "```" in raw_text:
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        result = json.loads(raw_text.strip())
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    print(f"  Warnung: Content-Plan konnte nicht geparst werden.")
+    return []
+
+
+def _call_langdock(prompt: str) -> str:
+    """Call Langdock API. Returns raw text response."""
     headers = {
         "Authorization": f"Bearer {LANGDOCK_API_KEY}",
         "Content-Type": "application/json"
     }
-
     payload = {
         "agentId": LANGDOCK_AGENT_ID,
         "messages": [{"id": "msg-1", "role": "user", "parts": [{"type": "text", "text": prompt}]}],
         "stream": False
     }
 
-    for attempt in range(5):
-        response = requests.post(LANGDOCK_URL, headers=headers, json=payload)
+    for attempt in range(3):
+        response = requests.post(LANGDOCK_URL, headers=headers, json=payload, timeout=120)
         if response.status_code == 429:
             wait = 15 * (attempt + 1)
             print(f"  Rate Limit – warte {wait}s...")
@@ -267,7 +282,6 @@ WICHTIG:
         break
 
     data = response.json()
-
     raw_text = ""
     for msg in data.get("result", []):
         if msg.get("role") == "assistant":
@@ -283,20 +297,24 @@ WICHTIG:
                         raw_text = block.get("text", "")
                     elif isinstance(block, str):
                         raw_text = block
+    return raw_text
 
-    try:
-        if "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        result = json.loads(raw_text.strip())
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
-        pass
 
-    print(f"  Warnung: Content-Plan konnte nicht geparst werden.")
-    return []
+def _call_claude(prompt: str) -> str:
+    """Call Anthropic Claude API as fallback. Returns raw text response."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8192,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    for block in response.content:
+        if block.type == "text":
+            return block.text.strip()
+    return ""
 
 
 def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 1, notes: str = "") -> str:

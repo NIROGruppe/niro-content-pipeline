@@ -328,32 +328,55 @@ Falls mehr als 3 Farben definiert sind, wähle die 3 wichtigsten.
 PDF-Text:
 {pdf_text[:8000]}"""
 
-    headers = {
-        "Authorization": f"Bearer {LANGDOCK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "agentId": LANGDOCK_AGENT_ID,
-        "messages": [{"id": "msg-1", "role": "user", "parts": [{"type": "text", "text": prompt}]}],
-        "stream": False
-    }
-
-    response = requests.post(LANGDOCK_URL, headers=headers, json=payload)
-    response.raise_for_status()
-    data = response.json()
-
+    # Try Langdock first, fall back to Claude
     raw_text = ""
-    for msg in data.get("result", []):
-        if msg.get("role") == "assistant":
-            for part in msg.get("parts", []):
-                if isinstance(part, dict) and part.get("type") == "text":
-                    raw_text = part.get("text", "")
-            if not raw_text:
-                for block in msg.get("content", []):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        raw_text = block.get("text", "")
-                    elif isinstance(block, str):
-                        raw_text = block
+    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
+        try:
+            headers = {
+                "Authorization": f"Bearer {LANGDOCK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "agentId": LANGDOCK_AGENT_ID,
+                "messages": [{"id": "msg-1", "role": "user", "parts": [{"type": "text", "text": prompt}]}],
+                "stream": False
+            }
+            response = requests.post(LANGDOCK_URL, headers=headers, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
+            for msg in data.get("result", []):
+                if msg.get("role") == "assistant":
+                    for part in msg.get("parts", []):
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            raw_text = part.get("text", "")
+                    if not raw_text:
+                        for block in msg.get("content", []):
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                raw_text = block.get("text", "")
+                            elif isinstance(block, str):
+                                raw_text = block
+        except Exception as e:
+            print(f"  Langdock Fehler: {e}")
+
+    if not raw_text:
+        try:
+            anthropic_key = get_secret("ANTHROPIC_API_KEY")
+            if anthropic_key:
+                import anthropic
+                client = anthropic.Anthropic(api_key=anthropic_key)
+                resp = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                for block in resp.content:
+                    if block.type == "text":
+                        raw_text = block.text.strip()
+        except Exception as e:
+            print(f"  Claude Fehler: {e}")
+
+    if not raw_text:
+        return None
 
     try:
         if "```" in raw_text:
