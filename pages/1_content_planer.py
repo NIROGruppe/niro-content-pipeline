@@ -78,6 +78,19 @@ with col_right:
 
 total_posts = days * posts_per_day
 
+# ─── FILE UPLOAD ───────────────────────────────────────────────────────────
+st.markdown('<div class="section-label">📎 Dateien einfügen (optional)</div>', unsafe_allow_html=True)
+st.markdown("*PDFs (z.B. Stellenausschreibungen), Bilder oder Textdateien — werden in die Content-Konzeption einbezogen.*")
+uploaded_files = st.file_uploader(
+    "Dateien hochladen",
+    type=["pdf", "png", "jpg", "jpeg", "webp", "txt", "docx"],
+    accept_multiple_files=True,
+    label_visibility="collapsed",
+)
+if uploaded_files:
+    file_names = ", ".join(f.name for f in uploaded_files)
+    st.info(f"📎 {len(uploaded_files)} Datei(en): {file_names}")
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ─── GENERATE BUTTON ────────────────────────────────────────────────────────
@@ -94,6 +107,7 @@ if st.button("🎬 Content Plan generieren", use_container_width=True, type="pri
                 posts_per_day=posts_per_day,
                 notes=notes,
                 content_category=content_category,
+                uploaded_files=uploaded_files if uploaded_files else [],
             )
             st.session_state["plan_generating"] = False
             st.session_state["selected_plan_file"] = os.path.basename(result_path)

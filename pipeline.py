@@ -1,6 +1,8 @@
 import os
+import io
 import json
 import time
+import base64
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
@@ -22,6 +24,79 @@ LANGDOCK_URL = "https://api.langdock.com/agent/v1/chat/completions"
 ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
 APIFY_API_TOKEN = _secret("APIFY_API_TOKEN")
 APIFY_TIKTOK_ACTOR = "clockworks~tiktok-scraper"
+
+
+def _extract_file_contents(uploaded_files: list) -> dict:
+    """Extract text and images from uploaded files.
+
+    Returns dict with:
+      - "text_parts": list of strings (extracted text from PDFs, txt, docx)
+      - "image_parts": list of dicts with {"data": base64, "media_type": str}
+    """
+    text_parts = []
+    image_parts = []
+
+    for f in uploaded_files:
+        name = f.name.lower()
+        f.seek(0)
+        raw = f.read()
+
+        if name.endswith(".pdf"):
+            try:
+                import pdfplumber
+                pdf = pdfplumber.open(io.BytesIO(raw))
+                pages = []
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        pages.append(text)
+                pdf.close()
+                if pages:
+                    text_parts.append(f"--- Datei: {f.name} ---\n" + "\n\n".join(pages))
+                else:
+                    text_parts.append(f"--- Datei: {f.name} (kein Text extrahierbar, evtl. Bild-PDF) ---")
+            except ImportError:
+                # Fallback: try PyPDF2
+                try:
+                    from PyPDF2 import PdfReader
+                    reader = PdfReader(io.BytesIO(raw))
+                    pages = []
+                    for page in reader.pages:
+                        text = page.extract_text()
+                        if text:
+                            pages.append(text)
+                    if pages:
+                        text_parts.append(f"--- Datei: {f.name} ---\n" + "\n\n".join(pages))
+                    else:
+                        text_parts.append(f"--- Datei: {f.name} (kein Text extrahierbar) ---")
+                except Exception:
+                    text_parts.append(f"--- Datei: {f.name} (PDF konnte nicht gelesen werden) ---")
+
+        elif name.endswith(".txt"):
+            text_parts.append(f"--- Datei: {f.name} ---\n" + raw.decode("utf-8", errors="replace"))
+
+        elif name.endswith(".docx"):
+            try:
+                from docx import Document
+                doc = Document(io.BytesIO(raw))
+                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                if paragraphs:
+                    text_parts.append(f"--- Datei: {f.name} ---\n" + "\n".join(paragraphs))
+            except Exception:
+                text_parts.append(f"--- Datei: {f.name} (DOCX konnte nicht gelesen werden) ---")
+
+        elif name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            ext_map = {".png": "image/png", ".jpg": "image/jpeg",
+                       ".jpeg": "image/jpeg", ".webp": "image/webp"}
+            ext = os.path.splitext(name)[1]
+            media_type = ext_map.get(ext, "image/png")
+            image_parts.append({
+                "data": base64.standard_b64encode(raw).decode("utf-8"),
+                "media_type": media_type,
+                "filename": f.name,
+            })
+
+    return {"text_parts": text_parts, "image_parts": image_parts}
 
 
 def send_to_visual_director(entry: dict, profile: dict = None) -> dict:
@@ -160,7 +235,8 @@ def load_profile(profile_slug: str) -> dict:
 
 
 def generate_raw_content_plan(profile: dict, days: int = 7, posts_per_day: int = 1,
-                              notes: str = "", content_category: str = "") -> list:
+                              notes: str = "", content_category: str = "",
+                              file_contents: dict = None) -> list:
     """Generates a raw content plan via Langdock based on the client profile."""
 
     colors_str = ", ".join([f"{c['name']}: {c['hex']}" for c in profile.get("colors", [])])
@@ -169,6 +245,18 @@ def generate_raw_content_plan(profile: dict, days: int = 7, posts_per_day: int =
     notes_section = ""
     if notes:
         notes_section = f"\nZusaetzliche Hinweise:\n{notes}\n"
+
+    # Uploaded file text content → inject into prompt
+    files_section = ""
+    if file_contents and file_contents.get("text_parts"):
+        files_text = "\n\n".join(file_contents["text_parts"])
+        files_section = (
+            f"\n\nHOCHGELADENE DOKUMENTE — diese Inhalte MUESSEN in die Content-Konzeption einfliessen:\n"
+            f"{files_text}\n\n"
+            f"WICHTIG: Die Inhalte aus den hochgeladenen Dokumenten (z.B. Stellenausschreibungen, "
+            f"Produktinfos, Kampagnen-Briefings) muessen konkret in die Posts eingearbeitet werden. "
+            f"Beziehe dich direkt auf die Informationen aus den Dokumenten.\n"
+        )
 
     # Category-specific instructions
     category_section = ""
@@ -212,7 +300,7 @@ Kundenprofil:
 - Markenfarben: {colors_str}
 - Sprache: {profile.get('language', 'Deutsch')}
 - Hinweise: {profile.get('notes', '')}
-{category_section}{notes_section}
+{category_section}{notes_section}{files_section}
 
 Gib das Ergebnis als valides JSON-Array zurueck – kein Text davor oder danach, nur JSON.
 
@@ -240,11 +328,15 @@ WICHTIG:
 - Tage: Montag bis Sonntag, dann wieder Montag etc.
 - Verteile Posts gleichmaessig auf die Tage"""
 
+    # Images from uploaded files (only usable by Claude, not Langdock)
+    image_parts = file_contents.get("image_parts", []) if file_contents else []
+    has_images = len(image_parts) > 0
+
     # Try each API — if response can't be parsed, try the next one
     errors = []
 
-    # 1. Try Langdock
-    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID:
+    # 1. Try Langdock (skip if images uploaded — Langdock can't handle images)
+    if LANGDOCK_API_KEY and LANGDOCK_AGENT_ID and not has_images:
         try:
             raw = _call_langdock(prompt)
             parsed = _try_parse_json_plan(raw)
@@ -253,12 +345,14 @@ WICHTIG:
             errors.append("Langdock: Antwort kam, aber JSON ungueltig")
         except Exception as e:
             errors.append(f"Langdock: {e}")
+    elif has_images:
+        print(f"  Bilder hochgeladen — nutze direkt Claude (Vision)")
 
     # 2. Try Claude (always if Langdock failed or returned bad JSON)
     if ANTHROPIC_API_KEY:
         try:
             print(f"  Wechsle zu Claude API...")
-            raw = _call_claude(prompt)
+            raw = _call_claude(prompt, image_parts=image_parts if has_images else None)
             parsed = _try_parse_json_plan(raw)
             if parsed:
                 return parsed
@@ -434,15 +528,34 @@ def _call_langdock(prompt: str) -> str:
     return raw_text
 
 
-def _call_claude(prompt: str) -> str:
-    """Call Anthropic Claude API as fallback. Returns raw text response."""
+def _call_claude(prompt: str, image_parts: list = None) -> str:
+    """Call Anthropic Claude API as fallback. Supports text + images (vision).
+    Returns raw text response."""
     import anthropic
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    # Build content blocks: images first, then text prompt
+    content = []
+    if image_parts:
+        for img in image_parts:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img["media_type"],
+                    "data": img["data"],
+                }
+            })
+            content.append({
+                "type": "text",
+                "text": f"[Hochgeladenes Bild: {img.get('filename', 'Bild')}]"
+            })
+    content.append({"type": "text", "text": prompt})
 
     with client.messages.stream(
         model="claude-sonnet-4-6",
         max_tokens=16384,
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": content}]
     ) as stream:
         response = stream.get_final_message()
 
@@ -460,17 +573,28 @@ def _call_claude(prompt: str) -> str:
 
 
 def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 1,
-                         notes: str = "", content_category: str = "") -> str:
+                         notes: str = "", content_category: str = "",
+                         uploaded_files: list = None) -> str:
     """Generates content plan from UI: creates raw plan, enriches it, saves output."""
 
     profile = load_profile(profile_slug)
     if not profile:
         raise ValueError(f"Profil '{profile_slug}' nicht gefunden.")
 
+    # Extract text/images from uploaded files
+    file_contents = None
+    if uploaded_files:
+        print(f"\n[0/3] {len(uploaded_files)} Datei(en) verarbeiten...")
+        file_contents = _extract_file_contents(uploaded_files)
+        n_text = len(file_contents.get("text_parts", []))
+        n_img = len(file_contents.get("image_parts", []))
+        print(f"  {n_text} Text-Dokument(e), {n_img} Bild(er) extrahiert")
+
     client_name = profile.get("name", profile_slug)
     print(f"\n[1/3] Content-Plan generieren fuer {client_name}...")
 
-    raw_plan = generate_raw_content_plan(profile, days, posts_per_day, notes, content_category)
+    raw_plan = generate_raw_content_plan(profile, days, posts_per_day, notes, content_category,
+                                         file_contents=file_contents)
     if not raw_plan:
         raise ValueError("Content-Plan konnte nicht generiert werden.")
     print(f"  {len(raw_plan)} Posts generiert")
