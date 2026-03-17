@@ -43,11 +43,12 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🚀 Leads scrapen", use_container_width=True, type="primary",
              disabled=(not search_term or not APIFY_API_TOKEN)):
-    from lead_scraper.scraper import run_full_scrape
+    from lead_scraper.scraper import scrape_google_maps, _fetch_page_text, _extract_emails_from_html
 
-    with st.spinner(f"🔍 Scrape läuft für '{search_term}'... (kann 3-8 Min. dauern, inkl. Email-Suche auf Websites)"):
+    # Step 1: Google Maps
+    with st.spinner(f"🔍 Google Maps Scrape für '{search_term}'..."):
         try:
-            leads = run_full_scrape(search_term, max_results)
+            leads = scrape_google_maps(search_term, max_results)
         except Exception as e:
             st.error(f"Scraping fehlgeschlagen: {e}")
             leads = []
@@ -55,8 +56,58 @@ if st.button("🚀 Leads scrapen", use_container_width=True, type="primary",
     if not leads:
         st.warning("Keine Leads gefunden. Versuche einen anderen Suchbegriff.")
     else:
-        n_with_email = sum(1 for l in leads if l.get("email"))
-        st.success(f"✅ {len(leads)} Leads gefunden! ({n_with_email} mit E-Mail)")
+        n_with_website = sum(1 for l in leads if l.get("website"))
+        n_without_email = sum(1 for l in leads if l.get("website") and not l.get("email"))
+        st.info(f"📍 {len(leads)} Leads von Google Maps ({n_with_website} mit Website, {n_without_email} ohne Email)")
+
+        # Step 2: Email Enrichment with progress
+        if n_without_email > 0:
+            progress_bar = st.progress(0, text="📧 Emails von Websites extrahieren...")
+            leads_to_enrich = [l for l in leads if l.get("website") and not l.get("email")]
+            enriched_count = 0
+            failed_sites = []
+
+            paths_to_try = ["", "/impressum", "/kontakt", "/contact", "/about", "/ueber-uns"]
+
+            for idx, lead in enumerate(leads_to_enrich):
+                base = lead["website"].rstrip("/")
+                if not base.startswith("http"):
+                    base = f"https://{base}"
+
+                progress_bar.progress(
+                    (idx + 1) / len(leads_to_enrich),
+                    text=f"📧 ({idx+1}/{len(leads_to_enrich)}) {lead['name'][:40]}..."
+                )
+
+                found = False
+                for path in paths_to_try:
+                    url = f"{base}{path}"
+                    html = _fetch_page_text(url)
+                    if html:
+                        emails = _extract_emails_from_html(html)
+                        if emails:
+                            lead["email"] = emails[0]
+                            enriched_count += 1
+                            found = True
+                            break
+
+                if not found:
+                    failed_sites.append(lead["name"])
+
+            progress_bar.empty()
+            st.success(
+                f"✅ {len(leads)} Leads gefunden! "
+                f"({enriched_count + sum(1 for l in leads if l.get('email') and l not in leads_to_enrich)} mit E-Mail)"
+            )
+
+            if failed_sites and len(failed_sites) <= 10:
+                with st.expander(f"⚠️ {len(failed_sites)} Leads ohne Email"):
+                    for name in failed_sites:
+                        st.caption(f"  — {name}")
+        else:
+            n_with_email = sum(1 for l in leads if l.get("email"))
+            st.success(f"✅ {len(leads)} Leads gefunden! ({n_with_email} mit E-Mail)")
+
         st.session_state["scraped_leads"] = leads
         st.session_state["new_leads"] = leads
         st.session_state["duplicate_leads"] = []
