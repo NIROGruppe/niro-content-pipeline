@@ -185,106 +185,111 @@ def scrape_web_directories(search_term: str, max_results: int = 50) -> list:
         return []
 
 
-def enrich_leads_with_emails(leads: list) -> list:
-    """Visit each lead's website and scrape email from Impressum/Kontakt pages.
+def _fetch_page_text(url: str, timeout: int = 10) -> str:
+    """Fetch a single page and return its HTML text. Returns '' on failure."""
+    try:
+        resp = requests.get(
+            url,
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            },
+            allow_redirects=True,
+        )
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        return ""
 
-    Uses Apify web scraper to crawl the lead websites and extract emails.
+
+def _extract_emails_from_html(html: str) -> list:
+    """Extract email addresses from HTML, decode obfuscated ones too."""
+    import re
+    from html import unescape
+
+    # Decode HTML entities first (e.g. &#64; → @, &#046; → .)
+    html = unescape(html)
+
+    # Also handle [at] [dot] obfuscation
+    deobfuscated = html.replace("[at]", "@").replace("[AT]", "@")
+    deobfuscated = deobfuscated.replace("[dot]", ".").replace("[DOT]", ".")
+    deobfuscated = deobfuscated.replace(" (at) ", "@").replace(" [at] ", "@")
+    deobfuscated = deobfuscated.replace(" (dot) ", ".").replace(" [dot] ", ".")
+
+    # Find mailto: links (most reliable)
+    mailto_pattern = re.compile(r'mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})')
+    emails = mailto_pattern.findall(deobfuscated)
+
+    # Also find plain emails in text
+    email_pattern = re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
+    emails.extend(email_pattern.findall(deobfuscated))
+
+    # Filter junk
+    junk = [
+        "@example", "@test", "noreply", "@sentry", "@wixpress",
+        "@google", "@facebook", "@instagram", "@twitter", "@youtube",
+        ".png", ".jpg", ".gif", ".svg", ".webp", "@2x", "@3x",
+        "schema.org", "w3.org", "wix.com", "wordpress",
+    ]
+    clean = []
+    seen = set()
+    for e in emails:
+        e_lower = e.lower().strip()
+        if e_lower in seen:
+            continue
+        if any(x in e_lower for x in junk):
+            continue
+        seen.add(e_lower)
+        clean.append(e)
+
+    return clean
+
+
+def enrich_leads_with_emails(leads: list) -> list:
+    """Visit each lead's website directly and scrape email from homepage/Impressum/Kontakt.
+
+    Uses direct HTTP requests (no Apify) — fast and free.
     Only enriches leads that have a website but no email.
     """
-    import re
+    from urllib.parse import urlparse
 
     leads_needing_email = [l for l in leads if l.get("website") and not l.get("email")]
-    if not leads_needing_email or not APIFY_API_TOKEN:
+    if not leads_needing_email:
         return leads
 
-    # Collect website URLs — try /impressum and /kontakt paths
-    start_urls = []
+    print(f"  Email-Enrichment: {len(leads_needing_email)} Websites direkt besuchen...")
+
+    # Paths to check on each website
+    paths_to_try = ["", "/impressum", "/kontakt", "/contact", "/about", "/ueber-uns"]
+
+    enriched = 0
     for lead in leads_needing_email:
         base = lead["website"].rstrip("/")
-        start_urls.append({"url": base})
-        start_urls.append({"url": f"{base}/impressum"})
-        start_urls.append({"url": f"{base}/kontakt"})
-        start_urls.append({"url": f"{base}/contact"})
 
-    # Cap at 100 URLs to avoid excessive costs
-    start_urls = start_urls[:100]
+        # Make sure URL has a scheme
+        if not base.startswith("http"):
+            base = f"https://{base}"
 
-    run_url = (
-        f"https://api.apify.com/v2/acts/{WEB_SCRAPER_ACTOR}/runs"
-        f"?token={APIFY_API_TOKEN}&waitForFinish=300"
-    )
-    payload = {
-        "startUrls": start_urls,
-        "maxCrawlPages": len(start_urls),
-        "maxCrawlDepth": 0,
-    }
+        found_email = None
+        for path in paths_to_try:
+            url = f"{base}{path}"
+            html = _fetch_page_text(url)
+            if not html:
+                continue
 
-    try:
-        print(f"  Email-Enrichment: {len(leads_needing_email)} Websites besuchen...")
-        response = requests.post(run_url, json=payload, timeout=360)
-        response.raise_for_status()
-
-        run_data = response.json()
-        dataset_id = run_data["data"]["defaultDatasetId"]
-
-        items_url = (
-            f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-            f"?token={APIFY_API_TOKEN}&limit={len(start_urls)}"
-        )
-        items_resp = requests.get(items_url, timeout=60)
-        items_resp.raise_for_status()
-        items = items_resp.json()
-
-        # Build map: domain → emails found
-        email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-        domain_emails = {}
-
-        for item in items:
-            text = item.get("text", "") or ""
-            url = item.get("url", "") or ""
-
-            emails = email_pattern.findall(text)
-            # Filter junk emails
-            emails = [e for e in emails if not any(
-                x in e.lower() for x in [
-                    "@example", "@test", "noreply", "@sentry", "@wixpress",
-                    "@google", "@facebook", "@instagram", "@twitter",
-                    ".png", ".jpg", ".gif", "@2x",
-                ]
-            )]
-
+            emails = _extract_emails_from_html(html)
             if emails:
-                # Extract domain from URL
-                try:
-                    from urllib.parse import urlparse
-                    domain = urlparse(url).netloc.lower().replace("www.", "")
-                    if domain not in domain_emails:
-                        domain_emails[domain] = emails[0]
-                except Exception:
-                    pass
+                found_email = emails[0]
+                break
 
-        # Match emails back to leads
-        enriched = 0
-        for lead in leads:
-            if lead.get("email"):
-                continue
-            website = lead.get("website", "")
-            if not website:
-                continue
-            try:
-                from urllib.parse import urlparse
-                domain = urlparse(website).netloc.lower().replace("www.", "")
-                if domain in domain_emails:
-                    lead["email"] = domain_emails[domain]
-                    enriched += 1
-            except Exception:
-                pass
+        if found_email:
+            lead["email"] = found_email
+            enriched += 1
+            print(f"    ✓ {lead['name']}: {found_email}")
 
-        print(f"  Email-Enrichment: {enriched} Emails gefunden")
-
-    except Exception as e:
-        print(f"  Email-Enrichment Fehler: {e}")
-
+    print(f"  Email-Enrichment: {enriched}/{len(leads_needing_email)} Emails gefunden")
     return leads
 
 
