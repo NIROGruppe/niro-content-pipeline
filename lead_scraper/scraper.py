@@ -185,8 +185,111 @@ def scrape_web_directories(search_term: str, max_results: int = 50) -> list:
         return []
 
 
+def enrich_leads_with_emails(leads: list) -> list:
+    """Visit each lead's website and scrape email from Impressum/Kontakt pages.
+
+    Uses Apify web scraper to crawl the lead websites and extract emails.
+    Only enriches leads that have a website but no email.
+    """
+    import re
+
+    leads_needing_email = [l for l in leads if l.get("website") and not l.get("email")]
+    if not leads_needing_email or not APIFY_API_TOKEN:
+        return leads
+
+    # Collect website URLs — try /impressum and /kontakt paths
+    start_urls = []
+    for lead in leads_needing_email:
+        base = lead["website"].rstrip("/")
+        start_urls.append({"url": base})
+        start_urls.append({"url": f"{base}/impressum"})
+        start_urls.append({"url": f"{base}/kontakt"})
+        start_urls.append({"url": f"{base}/contact"})
+
+    # Cap at 100 URLs to avoid excessive costs
+    start_urls = start_urls[:100]
+
+    run_url = (
+        f"https://api.apify.com/v2/acts/{WEB_SCRAPER_ACTOR}/runs"
+        f"?token={APIFY_API_TOKEN}&waitForFinish=300"
+    )
+    payload = {
+        "startUrls": start_urls,
+        "maxCrawlPages": len(start_urls),
+        "maxCrawlDepth": 0,
+    }
+
+    try:
+        print(f"  Email-Enrichment: {len(leads_needing_email)} Websites besuchen...")
+        response = requests.post(run_url, json=payload, timeout=360)
+        response.raise_for_status()
+
+        run_data = response.json()
+        dataset_id = run_data["data"]["defaultDatasetId"]
+
+        items_url = (
+            f"https://api.apify.com/v2/datasets/{dataset_id}/items"
+            f"?token={APIFY_API_TOKEN}&limit={len(start_urls)}"
+        )
+        items_resp = requests.get(items_url, timeout=60)
+        items_resp.raise_for_status()
+        items = items_resp.json()
+
+        # Build map: domain → emails found
+        email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+        domain_emails = {}
+
+        for item in items:
+            text = item.get("text", "") or ""
+            url = item.get("url", "") or ""
+
+            emails = email_pattern.findall(text)
+            # Filter junk emails
+            emails = [e for e in emails if not any(
+                x in e.lower() for x in [
+                    "@example", "@test", "noreply", "@sentry", "@wixpress",
+                    "@google", "@facebook", "@instagram", "@twitter",
+                    ".png", ".jpg", ".gif", "@2x",
+                ]
+            )]
+
+            if emails:
+                # Extract domain from URL
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(url).netloc.lower().replace("www.", "")
+                    if domain not in domain_emails:
+                        domain_emails[domain] = emails[0]
+                except Exception:
+                    pass
+
+        # Match emails back to leads
+        enriched = 0
+        for lead in leads:
+            if lead.get("email"):
+                continue
+            website = lead.get("website", "")
+            if not website:
+                continue
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(website).netloc.lower().replace("www.", "")
+                if domain in domain_emails:
+                    lead["email"] = domain_emails[domain]
+                    enriched += 1
+            except Exception:
+                pass
+
+        print(f"  Email-Enrichment: {enriched} Emails gefunden")
+
+    except Exception as e:
+        print(f"  Email-Enrichment Fehler: {e}")
+
+    return leads
+
+
 def run_full_scrape(search_term: str, max_results: int = 100) -> list:
-    """Run full scrape: Google Maps + Web directories. Deduplicates results."""
+    """Run full scrape: Google Maps + Web directories + email enrichment."""
     all_leads = []
 
     # 1. Google Maps (primary)
@@ -226,5 +329,12 @@ def run_full_scrape(search_term: str, max_results: int = 100) -> list:
             by_website[lead["name"]] = lead
 
     final = list(by_website.values())
+
+    # 3. Email enrichment — visit websites of leads without email
+    try:
+        final = enrich_leads_with_emails(final)
+    except Exception as e:
+        print(f"  Email-Enrichment Fehler: {e}")
+
     print(f"  Gesamt: {len(final)} einzigartige Leads")
     return final
