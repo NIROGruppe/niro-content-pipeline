@@ -165,7 +165,7 @@ def create_task(list_id: str, lead: dict, custom_field_mapping: dict = None) -> 
             f"- Quelle: {lead.get('source', '—')}\n"
             f"- Suchbegriff: {lead.get('search_term', '—')}"
         ),
-        "status": "to do",
+        "status": "NEU",
     }
 
     # Set custom fields if mapping provided
