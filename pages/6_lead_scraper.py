@@ -79,38 +79,94 @@ if new_leads or duplicate_leads:
     if CLICKUP_API_KEY and not st.session_state.get("clickup_dedup_done"):
         st.markdown('<div class="section-label">📋 ClickUp Abgleich</div>', unsafe_allow_html=True)
 
-        col_cu1, col_cu2 = st.columns([2, 1])
+        # Step 1: Load spaces (only on button click, cached in session_state)
+        if "clickup_spaces" not in st.session_state:
+            if st.button("🔄 ClickUp laden", use_container_width=True):
+                with st.spinner("⏳ ClickUp Spaces werden geladen... (kann einige Sekunden dauern)"):
+                    try:
+                        from lead_scraper.clickup import get_workspaces, get_spaces
+                        workspaces = get_workspaces()
+                        spaces = []
+                        for ws in workspaces:
+                            try:
+                                for s in get_spaces(ws["id"]):
+                                    spaces.append({"id": s["id"], "name": s["name"]})
+                            except Exception:
+                                pass
+                        st.session_state["clickup_spaces"] = spaces
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"ClickUp Fehler: {e}")
 
-        with col_cu1:
-            clickup_list_id = st.text_input(
-                "ClickUp List-ID",
-                placeholder="z.B. 901234567890",
-                help="Findest du in ClickUp unter: Liste → ··· → Copy Link → die Zahl am Ende der URL",
-            )
+        if "clickup_spaces" in st.session_state:
+            spaces = st.session_state["clickup_spaces"]
+            if not spaces:
+                st.warning("Keine ClickUp Spaces gefunden.")
+            else:
+                space_options = {s["name"]: s["id"] for s in spaces}
+                selected_space = st.selectbox("ClickUp Space", options=list(space_options.keys()))
+                space_id = space_options.get(selected_space, "")
 
-        with col_cu2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🔄 Mit ClickUp abgleichen", disabled=(not clickup_list_id)):
-                try:
-                    from lead_scraper.clickup import dedup_leads, auto_detect_field_mapping
+                # Step 2: Load lists for selected space
+                if space_id:
+                    lists_key = f"clickup_lists_{space_id}"
+                    if lists_key not in st.session_state:
+                        with st.spinner("⏳ Listen werden geladen..."):
+                            try:
+                                from lead_scraper.clickup import get_folders, get_lists
+                                folder_lists = []
+                                try:
+                                    for l in get_lists(space_id=space_id):
+                                        folder_lists.append({"id": l["id"], "name": l["name"], "folder": "(ohne Ordner)"})
+                                except Exception:
+                                    pass
+                                try:
+                                    for folder in get_folders(space_id):
+                                        try:
+                                            for l in get_lists(folder_id=folder["id"]):
+                                                folder_lists.append({"id": l["id"], "name": l["name"], "folder": folder["name"]})
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                                st.session_state[lists_key] = folder_lists
+                            except Exception as e:
+                                st.error(f"Fehler beim Laden der Listen: {e}")
+                                st.session_state[lists_key] = []
 
-                    with st.spinner("🔄 Abgleich mit ClickUp..."):
-                        result = dedup_leads(new_leads, clickup_list_id)
-                        st.session_state["new_leads"] = result["new"]
-                        st.session_state["duplicate_leads"] = result["duplicates"]
-                        st.session_state["clickup_existing"] = result["total_existing"]
-                        st.session_state["clickup_list_id"] = clickup_list_id
-                        st.session_state["clickup_dedup_done"] = True
+                    folder_lists = st.session_state.get(lists_key, [])
+                    if folder_lists:
+                        list_options = {
+                            f"{fl['folder']} / {fl['name']}": fl["id"]
+                            for fl in folder_lists
+                        }
+                        selected_list = st.selectbox("ClickUp Liste", options=list(list_options.keys()))
+                        clickup_list_id = list_options.get(selected_list, "")
 
-                        try:
-                            mapping = auto_detect_field_mapping(clickup_list_id)
-                            st.session_state["clickup_field_mapping"] = mapping
-                        except Exception:
-                            pass
+                        if clickup_list_id:
+                            if st.button("🔄 Mit ClickUp abgleichen", use_container_width=True):
+                                try:
+                                    from lead_scraper.clickup import dedup_leads, auto_detect_field_mapping
 
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"ClickUp Abgleich fehlgeschlagen: {e}")
+                                    with st.spinner("🔄 Abgleich mit ClickUp..."):
+                                        result = dedup_leads(new_leads, clickup_list_id)
+                                        st.session_state["new_leads"] = result["new"]
+                                        st.session_state["duplicate_leads"] = result["duplicates"]
+                                        st.session_state["clickup_existing"] = result["total_existing"]
+                                        st.session_state["clickup_list_id"] = clickup_list_id
+                                        st.session_state["clickup_dedup_done"] = True
+
+                                        try:
+                                            mapping = auto_detect_field_mapping(clickup_list_id)
+                                            st.session_state["clickup_field_mapping"] = mapping
+                                        except Exception:
+                                            pass
+
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"ClickUp Abgleich fehlgeschlagen: {e}")
+                    elif folder_lists is not None:
+                        st.info("Keine Listen in diesem Space gefunden.")
 
         st.markdown("---")
 
