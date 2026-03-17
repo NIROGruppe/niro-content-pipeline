@@ -381,6 +381,29 @@ def get_postmortems(limit: int = 50) -> list:
     return [dict(r) for r in rows]
 
 
+def get_postmortems_for_ticker(ticker: str) -> list:
+    """Get all postmortems for a specific ticker."""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM postmortems WHERE ticker = ? ORDER BY id DESC",
+        (ticker.upper(),)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_recent_lessons(limit: int = 10) -> list:
+    """Get recent lessons learned across all tickers for pattern awareness."""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT ticker, pattern_detected, lessons_learned, what_went_wrong, loss_amount "
+        "FROM postmortems ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ─── UNDERDOGS ────────────────────────────────────────────────────────────
 
 def insert_underdog(data: dict) -> int:

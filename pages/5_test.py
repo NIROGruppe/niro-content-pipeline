@@ -700,6 +700,13 @@ def render_stock_bot():
                         detail_row += f'<span style="font-size:12px;color:#888;">👁 {chk}</span>'
                     detail_row += '</div>'
 
+                reasoning_text = s.get("reasoning", "")
+                pm_warning = ""
+                if "BLOCKED" in reasoning_text:
+                    pm_warning = '<div style="background:#e74c3c20;border:1px solid #e74c3c;border-radius:6px;padding:6px 10px;margin-top:6px;font-size:12px;color:#e74c3c;">🚫 Durch Postmortem blockiert — manuelles Review nötig</div>'
+                elif "Downgrade" in reasoning_text or "Postmortem" in reasoning_text.split("[Learnings")[0]:
+                    pm_warning = '<div style="background:#f39c1220;border:1px solid #f39c12;border-radius:6px;padding:6px 10px;margin-top:6px;font-size:12px;color:#f39c12;">⚠️ Postmortem-Warnung — Ticker hatte bereits Verluste</div>'
+
                 st.markdown(
                     f'<div style="background:#1e1e1e;border-left:4px solid {strength_color};'
                     f'border-radius:8px;padding:12px 16px;margin-bottom:8px;">'
@@ -708,7 +715,8 @@ def render_stock_bot():
                     f'<span style="color:{strength_color};">({s.get("strength", "?")})</span></div>'
                     f'<div style="color:#888;">@ ${s.get("price_at_signal", 0):.2f}</div></div>'
                     + detail_row
-                    + f'<div style="font-size:12px;color:#666;margin-top:4px;">{s.get("reasoning", "")[:150]}</div>'
+                    + pm_warning
+                    + f'<div style="font-size:12px;color:#666;margin-top:4px;">{reasoning_text[:200]}</div>'
                     f'<div style="font-size:11px;color:#555;margin-top:2px;">{s.get("created_at", "")[:19]}</div>'
                     f'</div>',
                     unsafe_allow_html=True

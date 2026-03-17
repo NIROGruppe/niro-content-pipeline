@@ -1,13 +1,57 @@
 """
 Signal Agent — combines sentiment + price data to generate Buy/Sell/Hold signals.
 Includes position type (LONG/SHORT), hold duration, and check interval.
+Learns from past postmortem analyses to avoid repeating mistakes.
 """
+import json
 from stock_bot.config import load_settings
-from stock_bot.db.database import insert_signal, log_event
+from stock_bot.db.database import (
+    insert_signal, log_event,
+    get_postmortems_for_ticker, get_recent_lessons,
+)
+
+
+def _get_loss_history(ticker: str) -> dict:
+    """Check past postmortems for this ticker and recent patterns."""
+    ticker_pms = get_postmortems_for_ticker(ticker)
+    recent_lessons = get_recent_lessons(10)
+
+    # Collect patterns from this ticker
+    ticker_patterns = []
+    ticker_losses = 0
+    ticker_total_loss = 0.0
+    for pm in ticker_pms:
+        ticker_patterns.append(pm.get("pattern_detected", ""))
+        ticker_losses += 1
+        ticker_total_loss += pm.get("loss_amount", 0)
+
+    # Collect global patterns (across all tickers)
+    global_patterns = []
+    global_lessons = []
+    for lesson in recent_lessons:
+        pat = lesson.get("pattern_detected", "")
+        if pat:
+            global_patterns.append(pat)
+        learned = lesson.get("lessons_learned", "[]")
+        if isinstance(learned, str):
+            try:
+                learned = json.loads(learned)
+            except (json.JSONDecodeError, TypeError):
+                learned = []
+        if isinstance(learned, list):
+            global_lessons.extend(learned)
+
+    return {
+        "ticker_losses": ticker_losses,
+        "ticker_total_loss": ticker_total_loss,
+        "ticker_patterns": ticker_patterns,
+        "global_patterns": global_patterns,
+        "global_lessons": global_lessons[:10],  # Keep it manageable
+    }
 
 
 def generate_signal(ticker: str, sentiment: dict, price_data: dict, technicals: dict) -> dict:
-    """Generate a trading signal from sentiment + price data."""
+    """Generate a trading signal from sentiment + price data, informed by past losses."""
     settings = load_settings()
 
     score = sentiment.get("sentiment_score", 0)
@@ -20,6 +64,10 @@ def generate_signal(ticker: str, sentiment: dict, price_data: dict, technicals: 
     bullish_threshold = settings.get("sentiment_bullish_threshold", 0.3)
     bearish_threshold = settings.get("sentiment_bearish_threshold", -0.3)
     min_confidence = settings.get("signal_confidence_min", 40)
+
+    # ── POSTMORTEM FEEDBACK LOOP ──────────────────────────────────────────────
+    loss_history = _get_loss_history(ticker)
+    warnings = []
 
     # Low confidence = HOLD
     if confidence < min_confidence:
@@ -78,6 +126,48 @@ def generate_signal(ticker: str, sentiment: dict, price_data: dict, technicals: 
     elif rsi < 30 and direction == "SELL":
         strength = "WEAK"
         reasoning += f" Warning: RSI oversold ({rsi:.0f})."
+
+    # ── APPLY POSTMORTEM LEARNINGS ────────────────────────────────────────────
+
+    # 1. Ticker had losses before → downgrade strength + warn
+    if loss_history["ticker_losses"] > 0:
+        n = loss_history["ticker_losses"]
+        total = loss_history["ticker_total_loss"]
+        warnings.append(f"⚠️ Postmortem: {n}x Verlust bei {ticker} (${total:.0f} gesamt)")
+
+        if n >= 3:
+            # Repeated loser — force HOLD
+            direction = "HOLD"
+            strength = "WEAK"
+            reasoning += f" BLOCKED: {ticker} hat {n} Verlust-Trades. Manuelles Review noetig."
+        elif n >= 1 and strength == "STRONG":
+            strength = "MODERATE"
+            reasoning += f" Downgrade: {ticker} hatte bereits {n} Verlust-Trade(s)."
+
+    # 2. Check for contrarian trap pattern (bullish sentiment + bearish trend)
+    if "contrarian_trap" in loss_history["ticker_patterns"]:
+        if direction == "BUY" and trend == "BEARISH":
+            strength = "WEAK"
+            warnings.append("⚠️ Contrarian Trap erkannt — letztes Mal Verlust bei gleichem Muster")
+            reasoning += " WARNUNG: Contrarian Trap Pattern — wurde bei diesem Ticker schon erkannt."
+
+    # 3. Check global patterns — if sentiment_miss is common, require higher confidence
+    sentiment_misses = loss_history["global_patterns"].count("sentiment_miss")
+    if sentiment_misses >= 2 and confidence < 60:
+        if strength in ("STRONG", "MODERATE"):
+            strength = "MODERATE" if strength == "STRONG" else "WEAK"
+            warnings.append(f"⚠️ Sentiment-Miss Pattern ({sentiment_misses}x) — erhoehte Vorsicht")
+            reasoning += f" Vorsicht: {sentiment_misses}x Sentiment-Miss in letzten Trades."
+
+    # 4. Add lessons to reasoning
+    if loss_history["global_lessons"]:
+        top_lessons = loss_history["global_lessons"][:3]
+        lessons_str = " | ".join(top_lessons)
+        reasoning += f" [Learnings: {lessons_str}]"
+
+    # Log warnings
+    for w in warnings:
+        log_event("WARN", "signal_agent", f"{ticker}: {w}")
 
     # Determine position type, hold duration, check interval
     position_type = _get_position_type(direction, score, trend, rsi)
