@@ -16,16 +16,24 @@ st.markdown("""
 
 st.markdown("---")
 
-# ─── CONFIGURATION ─────────────────────────────────────────────────────────
+# ─── CHECK API KEYS ────────────────────────────────────────────────────────
 
-# Check API keys
-from lead_scraper.scraper import APIFY_API_TOKEN
-from lead_scraper.clickup import CLICKUP_API_KEY
+try:
+    from lead_scraper.scraper import APIFY_API_TOKEN
+except Exception:
+    APIFY_API_TOKEN = ""
+
+try:
+    from lead_scraper.clickup import CLICKUP_API_KEY
+except Exception:
+    CLICKUP_API_KEY = ""
 
 if not APIFY_API_TOKEN:
     st.error("⚠️ `APIFY_API_TOKEN` nicht konfiguriert. Bitte in `.env` oder Streamlit Secrets setzen.")
 if not CLICKUP_API_KEY:
     st.warning("⚠️ `CLICKUP_API_KEY` nicht konfiguriert. Scraping funktioniert, aber kein ClickUp-Sync.")
+
+# ─── CONFIGURATION ─────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-label">⚙️ Konfiguration</div>', unsafe_allow_html=True)
 
@@ -38,52 +46,63 @@ with col1:
     )
     max_results = st.slider("Max. Ergebnisse", min_value=10, max_value=300, value=50, step=10)
 
+# ClickUp list selection (separate from main flow to avoid crashes)
+clickup_list_id = ""
+
 with col2:
-    # ClickUp list selection
-    clickup_list_id = ""
-    clickup_field_mapping = {}
-
     if CLICKUP_API_KEY:
-        from lead_scraper.clickup import get_workspaces, get_spaces, get_folders, get_lists
-
-        # Cache workspace/space/list data
+        # Load ClickUp lists (cached)
         if "clickup_lists" not in st.session_state:
+            st.session_state["clickup_lists"] = []
+            st.session_state["clickup_error"] = ""
             try:
+                from lead_scraper.clickup import get_workspaces, get_spaces, get_folders, get_lists
                 workspaces = get_workspaces()
                 all_lists = []
                 for ws in workspaces:
-                    spaces = get_spaces(ws["id"])
+                    try:
+                        spaces = get_spaces(ws["id"])
+                    except Exception:
+                        spaces = []
                     for space in spaces:
-                        # Folderless lists
                         try:
                             fl_lists = get_lists(space_id=space["id"])
                             for l in fl_lists:
                                 all_lists.append({"id": l["id"], "name": f"{space['name']} / {l['name']}"})
                         except Exception:
                             pass
-                        # Lists in folders
                         try:
                             folders = get_folders(space["id"])
                             for folder in folders:
-                                f_lists = get_lists(folder_id=folder["id"])
-                                for l in f_lists:
-                                    all_lists.append({
-                                        "id": l["id"],
-                                        "name": f"{space['name']} / {folder['name']} / {l['name']}"
-                                    })
+                                try:
+                                    f_lists = get_lists(folder_id=folder["id"])
+                                    for l in f_lists:
+                                        all_lists.append({
+                                            "id": l["id"],
+                                            "name": f"{space['name']} / {folder['name']} / {l['name']}"
+                                        })
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                 st.session_state["clickup_lists"] = all_lists
             except Exception as e:
-                st.error(f"ClickUp Verbindung fehlgeschlagen: {e}")
-                st.session_state["clickup_lists"] = []
+                st.session_state["clickup_error"] = str(e)
+
+        # Show error or list selector
+        if st.session_state.get("clickup_error"):
+            st.error(f"ClickUp Fehler: {st.session_state['clickup_error']}")
+            if st.button("🔄 ClickUp neu laden", key="reload_clickup"):
+                del st.session_state["clickup_lists"]
+                del st.session_state["clickup_error"]
+                st.rerun()
 
         lists = st.session_state.get("clickup_lists", [])
         if lists:
             list_options = {l["name"]: l["id"] for l in lists}
             selected_list = st.selectbox("ClickUp Liste", options=list(list_options.keys()))
             clickup_list_id = list_options.get(selected_list, "")
-        else:
+        elif not st.session_state.get("clickup_error"):
             st.info("Keine ClickUp Listen gefunden.")
     else:
         st.info("ClickUp nicht verbunden — Leads werden nur in der App angezeigt.")
@@ -92,58 +111,54 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ─── SCRAPE BUTTON ─────────────────────────────────────────────────────────
 
-if st.button("🚀 Leads scrapen", use_container_width=True, type="primary", disabled=not search_term):
-    if not search_term:
-        st.error("Bitte Suchbegriff eingeben.")
+if st.button("🚀 Leads scrapen", use_container_width=True, type="primary",
+             disabled=(not search_term or not APIFY_API_TOKEN)):
+    from lead_scraper.scraper import run_full_scrape
+
+    # Step 1: Scrape
+    with st.spinner(f"🔍 Scrape läuft für '{search_term}'... (kann 2-5 Min. dauern)"):
+        try:
+            leads = run_full_scrape(search_term, max_results)
+        except Exception as e:
+            st.error(f"Scraping fehlgeschlagen: {e}")
+            leads = []
+
+    if not leads:
+        st.warning("Keine Leads gefunden. Versuche einen anderen Suchbegriff.")
     else:
-        from lead_scraper.scraper import run_full_scrape
-        from lead_scraper.clickup import dedup_leads, push_leads_to_clickup, auto_detect_field_mapping
+        st.success(f"✅ {len(leads)} Leads gefunden!")
+        st.session_state["scraped_leads"] = leads
+        st.session_state["new_leads"] = leads
+        st.session_state["duplicate_leads"] = []
 
-        # Step 1: Scrape
-        with st.spinner(f"🔍 Scrape läuft für '{search_term}'... (kann 2-5 Min. dauern)"):
+        # Step 2: ClickUp Dedup (only if connected)
+        if clickup_list_id and CLICKUP_API_KEY:
             try:
-                leads = run_full_scrape(search_term, max_results)
-            except Exception as e:
-                st.error(f"Scraping fehlgeschlagen: {e}")
-                leads = []
+                from lead_scraper.clickup import dedup_leads, auto_detect_field_mapping
 
-        if not leads:
-            st.warning("Keine Leads gefunden. Versuche einen anderen Suchbegriff.")
-        else:
-            st.success(f"✅ {len(leads)} Leads gefunden!")
-            st.session_state["scraped_leads"] = leads
-
-            # Step 2: ClickUp Dedup
-            if clickup_list_id and CLICKUP_API_KEY:
                 with st.spinner("🔄 Abgleich mit ClickUp..."):
+                    result = dedup_leads(leads, clickup_list_id)
+                    st.session_state["new_leads"] = result["new"]
+                    st.session_state["duplicate_leads"] = result["duplicates"]
+                    st.session_state["clickup_existing"] = result["total_existing"]
+                    st.session_state["clickup_list_id"] = clickup_list_id
+
+                    n_new = len(result["new"])
+                    n_dup = len(result["duplicates"])
+                    st.info(
+                        f"📊 **{n_new} neue Leads** | {n_dup} Duplikate "
+                        f"(bereits in ClickUp: {result['total_existing']})"
+                    )
+
+                    # Auto-detect field mapping
                     try:
-                        result = dedup_leads(leads, clickup_list_id)
-                        st.session_state["new_leads"] = result["new"]
-                        st.session_state["duplicate_leads"] = result["duplicates"]
-                        st.session_state["clickup_existing"] = result["total_existing"]
+                        mapping = auto_detect_field_mapping(clickup_list_id)
+                        st.session_state["clickup_field_mapping"] = mapping
+                    except Exception:
+                        pass
 
-                        n_new = len(result["new"])
-                        n_dup = len(result["duplicates"])
-                        st.info(
-                            f"📊 **{n_new} neue Leads** | {n_dup} Duplikate "
-                            f"(bereits in ClickUp: {result['total_existing']})"
-                        )
-
-                        # Auto-detect field mapping
-                        try:
-                            clickup_field_mapping = auto_detect_field_mapping(clickup_list_id)
-                            st.session_state["clickup_field_mapping"] = clickup_field_mapping
-                            st.session_state["clickup_list_id"] = clickup_list_id
-                        except Exception:
-                            pass
-
-                    except Exception as e:
-                        st.error(f"ClickUp Abgleich fehlgeschlagen: {e}")
-                        st.session_state["new_leads"] = leads
-                        st.session_state["duplicate_leads"] = []
-            else:
-                st.session_state["new_leads"] = leads
-                st.session_state["duplicate_leads"] = []
+            except Exception as e:
+                st.error(f"ClickUp Abgleich fehlgeschlagen: {e}")
 
 st.markdown("---")
 
@@ -164,18 +179,22 @@ if new_leads or duplicate_leads:
             if CLICKUP_API_KEY and st.session_state.get("clickup_list_id"):
                 if st.button("📤 Alle neuen Leads in ClickUp eintragen", type="primary",
                              use_container_width=True):
-                    mapping = st.session_state.get("clickup_field_mapping", {})
-                    list_id = st.session_state["clickup_list_id"]
+                    try:
+                        from lead_scraper.clickup import push_leads_to_clickup
+                        mapping = st.session_state.get("clickup_field_mapping", {})
+                        list_id = st.session_state["clickup_list_id"]
 
-                    with st.spinner(f"📤 {len(new_leads)} Leads in ClickUp eintragen..."):
-                        result = push_leads_to_clickup(new_leads, list_id, mapping)
+                        with st.spinner(f"📤 {len(new_leads)} Leads in ClickUp eintragen..."):
+                            result = push_leads_to_clickup(new_leads, list_id, mapping)
 
-                    if result["created"] > 0:
-                        st.success(f"✅ {result['created']} Leads erfolgreich eingetragen!")
-                    if result["failed"] > 0:
-                        st.warning(f"⚠️ {result['failed']} fehlgeschlagen")
-                        for err in result["errors"][:5]:
-                            st.caption(f"  ❌ {err}")
+                        if result["created"] > 0:
+                            st.success(f"✅ {result['created']} Leads erfolgreich eingetragen!")
+                        if result["failed"] > 0:
+                            st.warning(f"⚠️ {result['failed']} fehlgeschlagen")
+                            for err in result["errors"][:5]:
+                                st.caption(f"  ❌ {err}")
+                    except Exception as e:
+                        st.error(f"ClickUp Import fehlgeschlagen: {e}")
 
             # Display leads
             for i, lead in enumerate(new_leads):
