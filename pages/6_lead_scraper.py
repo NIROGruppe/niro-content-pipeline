@@ -35,6 +35,41 @@ if not CLICKUP_API_KEY:
 
 # ─── CONFIGURATION ─────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_clickup_lists():
+    """Load all ClickUp lists (cached for 5 min)."""
+    from lead_scraper.clickup import get_workspaces, get_spaces, get_folders, get_lists
+    workspaces = get_workspaces()
+    all_lists = []
+    for ws in workspaces:
+        try:
+            spaces = get_spaces(ws["id"])
+        except Exception:
+            continue
+        for space in spaces:
+            try:
+                fl_lists = get_lists(space_id=space["id"])
+                for l in fl_lists:
+                    all_lists.append({"id": l["id"], "name": f"{space['name']} / {l['name']}"})
+            except Exception:
+                pass
+            try:
+                folders = get_folders(space["id"])
+                for folder in folders:
+                    try:
+                        f_lists = get_lists(folder_id=folder["id"])
+                        for l in f_lists:
+                            all_lists.append({
+                                "id": l["id"],
+                                "name": f"{space['name']} / {folder['name']} / {l['name']}"
+                            })
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    return all_lists
+
+
 st.markdown('<div class="section-label">⚙️ Konfiguration</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
@@ -46,64 +81,23 @@ with col1:
     )
     max_results = st.slider("Max. Ergebnisse", min_value=10, max_value=300, value=50, step=10)
 
-# ClickUp list selection (separate from main flow to avoid crashes)
 clickup_list_id = ""
 
 with col2:
     if CLICKUP_API_KEY:
-        # Load ClickUp lists (cached)
-        if "clickup_lists" not in st.session_state:
-            st.session_state["clickup_lists"] = []
-            st.session_state["clickup_error"] = ""
-            try:
-                from lead_scraper.clickup import get_workspaces, get_spaces, get_folders, get_lists
-                workspaces = get_workspaces()
-                all_lists = []
-                for ws in workspaces:
-                    try:
-                        spaces = get_spaces(ws["id"])
-                    except Exception:
-                        spaces = []
-                    for space in spaces:
-                        try:
-                            fl_lists = get_lists(space_id=space["id"])
-                            for l in fl_lists:
-                                all_lists.append({"id": l["id"], "name": f"{space['name']} / {l['name']}"})
-                        except Exception:
-                            pass
-                        try:
-                            folders = get_folders(space["id"])
-                            for folder in folders:
-                                try:
-                                    f_lists = get_lists(folder_id=folder["id"])
-                                    for l in f_lists:
-                                        all_lists.append({
-                                            "id": l["id"],
-                                            "name": f"{space['name']} / {folder['name']} / {l['name']}"
-                                        })
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-                st.session_state["clickup_lists"] = all_lists
-            except Exception as e:
-                st.session_state["clickup_error"] = str(e)
-
-        # Show error or list selector
-        if st.session_state.get("clickup_error"):
-            st.error(f"ClickUp Fehler: {st.session_state['clickup_error']}")
-            if st.button("🔄 ClickUp neu laden", key="reload_clickup"):
-                del st.session_state["clickup_lists"]
-                del st.session_state["clickup_error"]
+        try:
+            lists = _load_clickup_lists()
+            if lists:
+                list_options = {l["name"]: l["id"] for l in lists}
+                selected_list = st.selectbox("ClickUp Liste", options=list(list_options.keys()))
+                clickup_list_id = list_options.get(selected_list, "")
+            else:
+                st.info("Keine ClickUp Listen gefunden.")
+        except Exception as e:
+            st.error(f"ClickUp Fehler: {e}")
+            if st.button("🔄 Neu laden", key="reload_clickup"):
+                _load_clickup_lists.clear()
                 st.rerun()
-
-        lists = st.session_state.get("clickup_lists", [])
-        if lists:
-            list_options = {l["name"]: l["id"] for l in lists}
-            selected_list = st.selectbox("ClickUp Liste", options=list(list_options.keys()))
-            clickup_list_id = list_options.get(selected_list, "")
-        elif not st.session_state.get("clickup_error"):
-            st.info("Keine ClickUp Listen gefunden.")
     else:
         st.info("ClickUp nicht verbunden — Leads werden nur in der App angezeigt.")
 
