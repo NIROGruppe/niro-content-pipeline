@@ -62,9 +62,9 @@ Das JSON muss exakt diese Struktur haben:
   "light": "Beschreibung des Licht-Setups",
   "reference_creator": "Name eines bekannten Creators oder Brands als Referenz",
   "shots": [
-    {{"number": 1, "description": "Kamerawinkel, Motiv, Dauer"}},
-    {{"number": 2, "description": "..."}},
-    {{"number": 3, "description": "..."}}
+    {{"number": 1, "description": "Kamerawinkel, Motiv, Dauer", "action": "Was genau in dieser Szene passiert – Handlung, Bewegung, Emotion"}},
+    {{"number": 2, "description": "...", "action": "..."}},
+    {{"number": 3, "description": "...", "action": "..."}}
   ],
   "text_overlay": {{
     "style": "Bold / Handwritten / Clean Sans-Serif",
@@ -159,7 +159,8 @@ def load_profile(profile_slug: str) -> dict:
     return {}
 
 
-def generate_raw_content_plan(profile: dict, days: int = 7, posts_per_day: int = 1, notes: str = "") -> list:
+def generate_raw_content_plan(profile: dict, days: int = 7, posts_per_day: int = 1,
+                              notes: str = "", content_category: str = "") -> list:
     """Generates a raw content plan via Langdock based on the client profile."""
 
     colors_str = ", ".join([f"{c['name']}: {c['hex']}" for c in profile.get("colors", [])])
@@ -168,6 +169,36 @@ def generate_raw_content_plan(profile: dict, days: int = 7, posts_per_day: int =
     notes_section = ""
     if notes:
         notes_section = f"\nZusaetzliche Hinweise:\n{notes}\n"
+
+    # Category-specific instructions
+    category_section = ""
+    if content_category and "Gemischt" not in content_category:
+        category_map = {
+            "Instagram Reel": (
+                "CONTENT-KATEGORIE: Instagram Reel\n"
+                "- Alle Posts muessen als Instagram Reels konzipiert sein (9:16 Hochformat, 15-90 Sek.)\n"
+                "- Formate: Day-in-the-Life, Tutorial, Transformation, POV, Trend-Adaptation etc.\n"
+                "- Hooks muessen in den ersten 1-2 Sekunden fesseln (Pattern Interrupt)\n"
+                "- Plattform bei allen: [\"Instagram Reel\"]"
+            ),
+            "Ad (Werbevideo)": (
+                "CONTENT-KATEGORIE: Werbevideo / Ad\n"
+                "- Alle Posts muessen als Werbevideos (Ads) konzipiert sein\n"
+                "- Formate: Product Showcase, Testimonial-Ad, Problem-Solution, Before-After, UGC-Style Ad etc.\n"
+                "- Jedes Video braucht einen klaren CTA (Call-to-Action)\n"
+                "- Hook muss sofort Aufmerksamkeit fangen (Ad-Hook, kein organischer Hook)\n"
+                "- Plattform bei allen: [\"Instagram\", \"TikTok\", \"YouTube\"]"
+            ),
+            "Imagefilm": (
+                "CONTENT-KATEGORIE: Imagefilm\n"
+                "- Alle Posts muessen als Imagefilm-Konzepte erstellt werden\n"
+                "- Formate: Brand Story, Behind-the-Scenes, Team Portrait, Unternehmenswerte, Kunden-Story etc.\n"
+                "- Laengere, cinematische Konzepte (60-180 Sek.)\n"
+                "- Professioneller, emotionaler Ton – kein Social-Media-Slang\n"
+                "- Plattform bei allen: [\"YouTube\", \"Website\"]"
+            ),
+        }
+        category_section = "\n" + category_map.get(content_category, "") + "\n"
 
     prompt = f"""Erstelle einen Content-Plan mit genau {total_posts} Posts fuer {days} Tage ({posts_per_day} Post(s) pro Tag).
 
@@ -181,7 +212,7 @@ Kundenprofil:
 - Markenfarben: {colors_str}
 - Sprache: {profile.get('language', 'Deutsch')}
 - Hinweise: {profile.get('notes', '')}
-{notes_section}
+{category_section}{notes_section}
 
 Gib das Ergebnis als valides JSON-Array zurueck – kein Text davor oder danach, nur JSON.
 
@@ -428,7 +459,8 @@ def _call_claude(prompt: str) -> str:
     raise RuntimeError("Claude: leere Antwort erhalten")
 
 
-def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 1, notes: str = "") -> str:
+def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 1,
+                         notes: str = "", content_category: str = "") -> str:
     """Generates content plan from UI: creates raw plan, enriches it, saves output."""
 
     profile = load_profile(profile_slug)
@@ -438,7 +470,7 @@ def run_pipeline_from_ui(profile_slug: str, days: int = 7, posts_per_day: int = 
     client_name = profile.get("name", profile_slug)
     print(f"\n[1/3] Content-Plan generieren fuer {client_name}...")
 
-    raw_plan = generate_raw_content_plan(profile, days, posts_per_day, notes)
+    raw_plan = generate_raw_content_plan(profile, days, posts_per_day, notes, content_category)
     if not raw_plan:
         raise ValueError("Content-Plan konnte nicht generiert werden.")
     print(f"  {len(raw_plan)} Posts generiert")

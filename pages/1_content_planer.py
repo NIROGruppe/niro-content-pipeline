@@ -65,10 +65,15 @@ with col_left:
     posts_per_day = st.number_input("Posts pro Tag", min_value=1, max_value=5, value=1, step=1)
 
 with col_right:
+    content_category = st.selectbox(
+        "Content-Kategorie",
+        ["Instagram Reel", "Ad (Werbevideo)", "Imagefilm", "Gemischt (alle Formate)"],
+        index=0,
+    )
     notes = st.text_area(
         "Anmerkungen",
         placeholder="z.B. Fokus auf Recruiting, bestimmte Kampagne, Themen vermeiden...",
-        height=132,
+        height=100,
     )
 
 total_posts = days * posts_per_day
@@ -88,6 +93,7 @@ if st.button("🎬 Content Plan generieren", use_container_width=True, type="pri
                 days=days,
                 posts_per_day=posts_per_day,
                 notes=notes,
+                content_category=content_category,
             )
             st.session_state["plan_generating"] = False
             st.session_state["selected_plan_file"] = os.path.basename(result_path)

@@ -255,7 +255,11 @@ def render_shot_list(shots: list) -> str:
     for shot in shots:
         num = shot.get("number", "?")
         desc = shot.get("description", "")
-        html += f'<div class="shot-item">🎬 <b>Shot {num}:</b> {desc}</div>'
+        action = shot.get("action", "")
+        html += f'<div class="shot-item">🎬 <b>Shot {num}:</b> {desc}'
+        if action:
+            html += f'<br><span style="color:#e63946;font-size:12px;">▶ {action}</span>'
+        html += '</div>'
     return html
 
 
