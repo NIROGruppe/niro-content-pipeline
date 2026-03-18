@@ -175,10 +175,20 @@ plan = plan_data.get("plan", [])
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-info_col1, info_col2, info_col3 = st.columns(3)
+info_col1, info_col2, info_col3, dl_col = st.columns([2, 2, 2, 1])
 info_col1.markdown(f"**Kunde:** {plan_data.get('client', '–')}")
 info_col2.markdown(f"**Erstellt:** {plan_data.get('generated_at', '–')}")
 info_col3.markdown(f"**Profil:** {plan_data.get('profile', '–')}")
+
+import json
+client_name = plan_data.get("client", "plan").replace(" ", "_")
+dl_filename = f"contentplan_{client_name}_{plan_data.get('generated_at', 'unknown')}.json"
+dl_col.download_button(
+    "⬇️ JSON",
+    data=json.dumps(plan_data, ensure_ascii=False, indent=2),
+    file_name=dl_filename,
+    mime="application/json",
+)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
