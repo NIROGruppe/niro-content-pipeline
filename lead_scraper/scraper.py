@@ -51,7 +51,7 @@ def scrape_google_maps(search_term: str, max_results: int = 100,
     run_url = f"https://api.apify.com/v2/acts/{GOOGLE_MAPS_ACTOR}/runs?token={APIFY_API_TOKEN}&waitForFinish=300"
     payload = {
         "searchStringsArray": queries,
-        "maxCrawledPlacesPerSearch": max(max_results // len(queries), 5),
+        "maxCrawledPlacesPerSearch": max_results,
         "language": "de",
         "maxImages": 0,
         "maxReviews": 0,
@@ -108,31 +108,42 @@ def scrape_google_maps(search_term: str, max_results: int = 100,
     return leads
 
 
-def scrape_web_directories(search_term: str, max_results: int = 50) -> list:
-    """Scrape web directories/portals for contact data via Apify web scraper.
+GOOGLE_SEARCH_ACTOR = "nFJndFXA5zjCTuudP"  # apify/google-search-scraper
 
-    Searches common business directories for the given term.
-    Returns list of dicts with: name, email, phone, website.
+
+def scrape_google_search(search_term: str, max_results: int = 100,
+                         regions: list = None) -> list:
+    """Find leads via Google Search — catches businesses not listed on Google Maps.
+
+    Searches Google for the term + region variations, visits each result website,
+    and extracts contact data (email, phone) directly.
+    Returns list of dicts with: name, email, phone, website, address.
     """
     if not APIFY_API_TOKEN:
         return []
 
-    # Search URLs for common German business directories
-    search_urls = [
-        f"https://www.google.com/search?q={search_term}+email+kontakt+site:hochzeitsportal24.de",
-        f"https://www.google.com/search?q={search_term}+email+kontakt+site:eventlocation.de",
-        f"https://www.google.com/search?q={search_term}+kontakt+email",
-    ]
+    from urllib.parse import urlparse
 
-    run_url = f"https://api.apify.com/v2/acts/{WEB_SCRAPER_ACTOR}/runs?token={APIFY_API_TOKEN}&waitForFinish=180"
+    if regions is None:
+        regions = DEFAULT_REGIONS[:6]
+
+    queries = [f"{search_term} {region}" for region in regions]
+
+    run_url = (
+        f"https://api.apify.com/v2/acts/{GOOGLE_SEARCH_ACTOR}/runs"
+        f"?token={APIFY_API_TOKEN}&waitForFinish=180"
+    )
     payload = {
-        "startUrls": [{"url": u} for u in search_urls],
-        "maxCrawlPages": max_results,
-        "maxCrawlDepth": 1,
+        "queries": "\n".join(queries),
+        "maxPagesPerQuery": max(max_results // (len(queries) * 10), 1),
+        "resultsPerPage": 100,
+        "languageCode": "de",
+        "countryCode": "de",
+        "mobileResults": False,
     }
 
     try:
-        print(f"  Web Scraper: Verzeichnisse durchsuchen...")
+        print(f"  Google Suche: {len(queries)} Suchanfragen starten...")
         response = requests.post(run_url, json=payload, timeout=240)
         response.raise_for_status()
 
@@ -141,47 +152,88 @@ def scrape_web_directories(search_term: str, max_results: int = 50) -> list:
 
         items_url = (
             f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-            f"?token={APIFY_API_TOKEN}&limit={max_results}"
+            f"?token={APIFY_API_TOKEN}&limit=500"
         )
         items_resp = requests.get(items_url, timeout=60)
         items_resp.raise_for_status()
         items = items_resp.json()
 
-        # Extract contact info from crawled pages
-        import re
-        email_pattern = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-        phone_pattern = re.compile(r'(?:\+49|0049|0)\s*[\d\s/\-()]{8,15}')
+        # Collect unique domains from organic results
+        skip_domains = {
+            "google.com", "youtube.com", "facebook.com", "instagram.com",
+            "linkedin.com", "twitter.com", "pinterest.com", "yelp.com",
+            "wikipedia.org", "amazon.de", "ebay.de", "tiktok.com",
+        }
 
-        leads = []
+        seen_domains = set()
+        candidates = []
+
         for item in items:
-            text = item.get("text", "") or ""
-            title = item.get("title", "") or ""
-            url = item.get("url", "") or ""
+            organic = item.get("organicResults", [])
+            for result in organic:
+                url = result.get("url", "")
+                title = result.get("title", "")
+                if not url:
+                    continue
 
-            emails = email_pattern.findall(text)
-            phones = phone_pattern.findall(text)
+                domain = urlparse(url).netloc.lower().lstrip("www.")
+                if domain in seen_domains or any(sd in domain for sd in skip_domains):
+                    continue
+                seen_domains.add(domain)
 
-            # Filter out generic emails
-            emails = [e for e in emails if not any(
-                x in e.lower() for x in ["@example", "@test", "noreply", "info@google"]
-            )]
-
-            if emails:
-                leads.append({
-                    "name": title[:100] if title else url,
-                    "email": emails[0],
-                    "phone": phones[0].strip() if phones else "",
+                candidates.append({
+                    "name": title,
                     "website": url,
+                })
+
+                if len(candidates) >= max_results:
+                    break
+            if len(candidates) >= max_results:
+                break
+
+        print(f"  Google Suche: {len(candidates)} Websites gefunden, Kontaktdaten extrahieren...")
+
+        # Visit each website and extract contact info
+        leads = []
+        paths_to_try = ["", "/impressum", "/kontakt", "/contact"]
+
+        for cand in candidates:
+            base = cand["website"].rstrip("/")
+            if not base.startswith("http"):
+                base = f"https://{base}"
+
+            found_email = None
+            found_phone = None
+            for path in paths_to_try:
+                html = _fetch_page_text(f"{base}{path}")
+                if not html:
+                    continue
+                emails = _extract_emails_from_html(html)
+                if emails:
+                    found_email = emails[0]
+                    # Also try to find phone
+                    import re
+                    phones = re.findall(r'(?:\+49|0049|0)\s*[\d\s/\-()]{8,15}', html)
+                    if phones:
+                        found_phone = phones[0].strip()
+                    break
+
+            if found_email:
+                leads.append({
+                    "name": cand["name"],
+                    "email": found_email,
+                    "phone": found_phone or "",
+                    "website": cand["website"],
                     "address": "",
-                    "source": "Web Scraper",
+                    "source": "Google Suche",
                     "search_term": search_term,
                 })
 
-        print(f"  Web Scraper: {len(leads)} Leads gefunden")
+        print(f"  Google Suche: {len(leads)} Leads mit Kontaktdaten gefunden")
         return leads
 
     except Exception as e:
-        print(f"  Web Scraper Fehler: {e}")
+        print(f"  Google Suche Fehler: {e}")
         return []
 
 
@@ -304,12 +356,12 @@ def run_full_scrape(search_term: str, max_results: int = 100) -> list:
     except Exception as e:
         print(f"  Google Maps Fehler: {e}")
 
-    # 2. Web directories (secondary)
+    # 2. Google Search (secondary — finds businesses not on Maps)
     try:
-        web_leads = scrape_web_directories(search_term, max_results=30)
-        all_leads.extend(web_leads)
+        gs_leads = scrape_google_search(search_term, max_results)
+        all_leads.extend(gs_leads)
     except Exception as e:
-        print(f"  Web Scraper Fehler: {e}")
+        print(f"  Google Suche Fehler: {e}")
 
     # Deduplicate by name (case-insensitive)
     seen = set()

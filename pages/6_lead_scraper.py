@@ -43,15 +43,56 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🚀 Leads scrapen", use_container_width=True, type="primary",
              disabled=(not search_term or not APIFY_API_TOKEN)):
-    from lead_scraper.scraper import scrape_google_maps, _fetch_page_text, _extract_emails_from_html
+    from lead_scraper.scraper import scrape_google_maps, scrape_google_search, _fetch_page_text, _extract_emails_from_html
 
     # Step 1: Google Maps
     with st.spinner(f"🔍 Google Maps Scrape für '{search_term}'..."):
         try:
             leads = scrape_google_maps(search_term, max_results)
         except Exception as e:
-            st.error(f"Scraping fehlgeschlagen: {e}")
+            st.error(f"Google Maps Scraping fehlgeschlagen: {e}")
             leads = []
+
+    gm_count = len(leads)
+    st.info(f"📍 Google Maps: {gm_count} Leads gefunden")
+
+    # Step 2: Google Search (finds businesses not on Maps)
+    with st.spinner(f"🌐 Google Suche für '{search_term}'..."):
+        try:
+            gs_leads = scrape_google_search(search_term, max_results)
+        except Exception as e:
+            st.error(f"Google Suche fehlgeschlagen: {e}")
+            gs_leads = []
+
+    # Merge and deduplicate
+    all_leads = leads + gs_leads
+    seen = set()
+    leads = []
+    for lead in all_leads:
+        key = lead["name"].lower().strip()
+        if key not in seen:
+            seen.add(key)
+            leads.append(lead)
+
+    # Also dedup by domain
+    by_domain = {}
+    for lead in leads:
+        from urllib.parse import urlparse
+        w = lead.get("website", "").rstrip("/").lower()
+        if w:
+            domain = urlparse(w if w.startswith("http") else f"https://{w}").netloc.lstrip("www.")
+        else:
+            domain = lead["name"].lower()
+        if domain in by_domain:
+            existing = by_domain[domain]
+            if not existing.get("email") and lead.get("email"):
+                by_domain[domain] = lead
+        else:
+            by_domain[domain] = lead
+    leads = list(by_domain.values())
+
+    if len(gs_leads) > 0:
+        st.info(f"🌐 Google Suche: {len(gs_leads)} zusätzliche Leads → **{len(leads)} unique Leads** nach Deduplizierung")
 
     if not leads:
         st.warning("Keine Leads gefunden. Versuche einen anderen Suchbegriff.")

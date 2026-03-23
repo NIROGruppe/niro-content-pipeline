@@ -598,7 +598,7 @@ def render_stock_bot():
         init_db as stock_init_db, get_stats as stock_stats,
         get_watchlist, add_ticker, remove_ticker,
         get_signals, get_all_latest_sentiments,
-        get_open_trades as stock_open_trades, get_closed_trades,
+        get_open_trades as stock_open_trades, get_closed_trades as stock_closed_trades,
         get_all_trades as stock_all_trades, insert_trade as stock_insert_trade,
         get_postmortems as stock_postmortems, get_recent_logs as stock_logs,
         get_underdogs, get_recent_underdogs,
@@ -844,7 +844,7 @@ def render_stock_bot():
         # Closed trades
         st.markdown("---")
         st.markdown("**Geschlossene Trades:**")
-        closed = get_closed_trades()
+        closed = stock_closed_trades()
         if closed:
             for t in closed[:20]:
                 pnl = t.get("pnl", 0)
