@@ -784,21 +784,35 @@ def render_stock_bot():
                 with tc1:
                     trade_ticker = st.text_input("Ticker", placeholder="AAPL").upper()
                     trade_direction = st.selectbox("Richtung", ["LONG", "SHORT"])
-                with tc2:
                     trade_entry = st.number_input("Entry Price ($)", min_value=0.01, step=0.01)
+                with tc2:
                     trade_size = st.number_input("Anzahl Aktien", min_value=0.01, step=1.0, value=1.0)
+                    from datetime import date as _date
+                    trade_date = st.date_input("Eröffnet am", value=_date.today())
+                    trade_exit = st.number_input("Exit Price ($) — leer = noch offen", min_value=0.0, step=0.01, value=0.0)
 
                 trade_notes = st.text_area("Notizen (optional)", placeholder="Warum diesen Trade?")
 
                 if st.form_submit_button("💾 Trade speichern", use_container_width=True, type="primary"):
                     if trade_ticker and trade_entry > 0:
-                        tid = stock_insert_trade({
+                        trade_data = {
                             "ticker": trade_ticker,
                             "direction": trade_direction,
                             "entry_price": trade_entry,
                             "size": trade_size,
                             "notes": trade_notes,
-                        })
+                            "opened_at": f"{trade_date.isoformat()}T00:00:00",
+                        }
+                        if trade_exit > 0:
+                            if trade_direction == "LONG":
+                                pnl = round((trade_exit - trade_entry) * trade_size, 2)
+                            else:
+                                pnl = round((trade_entry - trade_exit) * trade_size, 2)
+                            trade_data["exit_price"] = trade_exit
+                            trade_data["pnl"] = pnl
+                            trade_data["status"] = "closed"
+                            trade_data["closed_at"] = f"{trade_date.isoformat()}T23:59:59"
+                        tid = stock_insert_trade(trade_data)
                         st.success(f"Trade #{tid} gespeichert!")
                         st.rerun()
 

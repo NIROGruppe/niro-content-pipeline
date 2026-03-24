@@ -288,13 +288,20 @@ def get_signals_for_ticker(ticker: str, limit: int = 20) -> list:
 
 def insert_trade(data: dict) -> int:
     conn = _conn()
+    opened_at = data.get("opened_at") or datetime.now().isoformat()
+    status = data.get("status", "open")
+    exit_price = data.get("exit_price")
+    pnl = data.get("pnl", 0)
+    closed_at = data.get("closed_at")
+
     cur = conn.execute(
-        "INSERT INTO trades (ticker, direction, entry_price, size, status, signal_id, "
-        "notes, opened_at) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+        "INSERT INTO trades (ticker, direction, entry_price, exit_price, size, status, "
+        "pnl, signal_id, notes, opened_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             data["ticker"], data["direction"], data["entry_price"],
-            data.get("size", 0), data.get("signal_id"), data.get("notes", ""),
-            datetime.now().isoformat()
+            exit_price, data.get("size", 0), status, pnl,
+            data.get("signal_id"), data.get("notes", ""),
+            opened_at, closed_at
         )
     )
     conn.commit()
