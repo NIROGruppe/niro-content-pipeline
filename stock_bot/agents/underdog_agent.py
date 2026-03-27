@@ -28,39 +28,43 @@ TICKER_BLACKLIST = {
     "TOO", "USE", "WAY", "WHO", "BOY", "DID", "GET", "PUT", "RUN", "SAW",
     "TOP", "TEN", "BIG", "RED", "ANY", "DAY", "LONG", "SHORT", "CALL",
     "CALLS", "HOLD", "BUY", "SELL", "HIGH", "LOW", "YOLO", "MOON", "PUMP",
+    "TERM", "STOCK", "FORM", "NEWS", "BEST", "YEAR", "CASH", "FUND",
+    "BANK", "RATE", "RISE", "FALL", "GAIN", "DROP", "MOVE", "NEXT",
+    "MORE", "MOST", "JUST", "ALSO", "BACK", "OVER", "ONLY", "WELL",
+    "MUCH", "VERY", "SOME", "WHAT", "WHEN", "WILL", "WITH", "THAN",
+    "THEM", "THEN", "THIS", "THAT", "BEEN", "HAVE", "EACH", "MAKE",
+    "LIKE", "MANY", "SAID", "FROM", "WERE", "HERE", "LOOK", "TAKE",
+    "COME", "MADE", "FIND", "KNOW", "WANT", "GIVE", "TELL", "GOOD",
+    "KEEP", "LAST", "PAST", "WORK", "LIFE", "REAL", "PLAN", "FREE",
 }
 
-# Small/mid cap candidate universe — popular small/mid caps that could be underdogs
-# These are scanned for unusual volume directly via yfinance
+# Scan universe — stocks available on Trade Republic
+# All verified tradeable on TR (US large/mid caps + EU stocks)
 SCAN_UNIVERSE = [
-    # High-growth small-mid caps
-    "PLTR", "SOFI", "HOOD", "RKLB", "IONQ", "JOBY", "AFRM",
-    "UPST", "DOCS", "OPEN", "LMND",
-    # Small/Mid cap tech
-    "ASTS", "LUNR", "RDW", "MNDY", "GTLB", "BRZE", "CFLT",
-    "DUOL", "CWAN", "TOST", "GRAB", "SE",
-    # Biotech / Healthcare
-    "NNOX", "GDRX", "HIMS", "ACHR", "ARQT", "RXRX", "DNA",
-    # Energy / Clean tech
-    "PLUG", "FCEL", "BLNK", "CHPT", "QS", "ENPH", "SEDG", "RUN",
-    # High retail interest
-    "BB", "NOK", "SPCE", "LCID", "RIVN", "NIO", "XPEV", "LI",
-    # Fintech / Crypto-adjacent
-    "NU", "COIN", "MARA", "RIOT", "CLSK", "BITF", "HUT", "CORZ",
-    # Small industrials / Materials / Space
-    "MP", "LAC", "ALB", "IRDM", "BWXT",
-    # Additional growth
-    "PATH", "AI", "DDOG", "NET", "CRWD", "ZS", "BILL", "FRSH", "GLBE",
-    # EU / German stocks
-    "SAP", "SIE.DE", "IFX.DE", "DTE.DE", "BAS.DE",
-    # Recent momentum names
-    "SMCI", "ARM", "RDDT", "BIRK", "CART", "CAVA", "DJT",
-    "OKLO", "VST", "VIAV", "SOUN", "GSAT",
+    # US Tech (all on TR)
+    "PLTR", "COIN", "NET", "CRWD", "DDOG", "ZS", "SHOP",
+    "SNAP", "PINS", "ROKU", "SPOT", "PYPL", "UBER", "ABNB",
+    "SE", "GRAB", "DUOL", "ARM", "SMCI", "RDDT",
+    # US Growth / Retail favorites (on TR)
+    "NIO", "XPEV", "LI", "RIVN", "LCID", "PLUG", "ENPH",
+    "MARA", "RIOT", "HOOD", "SOFI", "NU", "UPST",
+    # US Mid caps (on TR)
+    "HIMS", "CAVA", "BIRK", "NOK", "BB",
+    "QS", "CHPT", "SEDG", "ALB",
+    # EU / German stocks (on TR via XETRA)
+    "SAP.DE", "SIE.DE", "IFX.DE", "DTE.DE", "BAS.DE",
+    "ADS.DE", "BMW.DE", "MBG.DE", "VOW3.DE", "ALV.DE",
+    "MUV2.DE", "RHM.DE", "HEN3.DE", "AIR.PA", "ASML.AS",
+    "MC.PA", "OR.PA", "SAN.PA", "TTE.PA", "NOVO-B.CO",
+    # US Blue chips with momentum potential (on TR)
+    "AMD", "INTC", "MU", "DELL", "HPE",
+    "CCL", "DAL", "UAL", "LUV",
+    "RBLX", "U", "TTWO", "EA",
 ]
 
 # Market cap filter range
-MIN_MARKET_CAP = 300_000_000     # $300M
-MAX_MARKET_CAP = 15_000_000_000  # $15B
+MIN_MARKET_CAP = 300_000_000      # $300M
+MAX_MARKET_CAP = 50_000_000_000   # $50B — higher to include EU mid caps
 
 
 def extract_tickers_from_text(text: str) -> list:
@@ -180,50 +184,98 @@ def scan_volume_movers() -> list:
 
 
 def scan_rss_for_tickers() -> Counter:
-    """Scan financial RSS feeds for trending ticker mentions."""
+    """Scan financial RSS/news feeds for trending ticker mentions."""
+    import feedparser
+    import requests
+
     ticker_counts = Counter()
 
-    try:
-        from trading_bot.utils.scraper import search_rss
-    except ImportError:
-        log_event("WARN", "underdog_agent", "scraper import failed, skipping RSS")
-        return ticker_counts
-
     rss_feeds = [
-        "https://www.reddit.com/r/wallstreetbets/hot.rss",
-        "https://www.reddit.com/r/stocks/hot.rss",
-        "https://www.reddit.com/r/pennystocks/hot.rss",
-        "https://www.reddit.com/r/smallstreetbets/hot.rss",
-        "https://news.google.com/rss/search?q=stock+momentum+small+cap&hl=en-US",
-        "https://news.google.com/rss/search?q=undervalued+stocks&hl=en-US",
+        # Finance news (reliable, no auth needed)
+        "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US",
+        "https://news.google.com/rss/search?q=stock+momentum+when:3d&hl=en-US",
+        "https://news.google.com/rss/search?q=undervalued+stocks+when:3d&hl=en-US",
+        "https://news.google.com/rss/search?q=best+stocks+to+buy+when:3d&hl=en-US",
+        "https://news.google.com/rss/search?q=Aktien+Empfehlung+when:3d&hl=de",
+        "https://seekingalpha.com/market_currents.xml",
+        "https://www.investopedia.com/feedbuilder/feed/getfeed?feedName=rss_headline",
     ]
 
-    log_event("INFO", "underdog_agent", "Scanning RSS feeds for ticker mentions...")
+    log_event("INFO", "underdog_agent", "Scanning news feeds for ticker mentions...")
 
-    all_posts = []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; StockBot/1.0)"}
+
+    def fetch_feed(url):
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                return feedparser.parse(resp.text)
+        except Exception:
+            pass
+        return None
+
+    all_entries = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {}
-        for feed_url in rss_feeds:
-            future = executor.submit(search_rss, "stocks", [feed_url], 25)
-            futures[future] = feed_url
-
+        futures = {executor.submit(fetch_feed, url): url for url in rss_feeds}
         for future in concurrent.futures.as_completed(futures):
             try:
-                posts = future.result()
-                all_posts.extend(posts)
+                feed = future.result()
+                if feed and feed.entries:
+                    all_entries.extend(feed.entries)
             except Exception:
                 pass
 
-    for post in all_posts:
-        if post.get("error"):
-            continue
-        text = f"{post.get('title', '')} {post.get('text', '')} {post.get('summary', '')}"
+    # Company name → ticker mapping for news matching
+    ticker_names = {
+        "palantir": "PLTR", "coinbase": "COIN", "cloudflare": "NET",
+        "crowdstrike": "CRWD", "datadog": "DDOG", "zscaler": "ZS",
+        "shopify": "SHOP", "snapchat": "SNAP", "snap inc": "SNAP",
+        "pinterest": "PINS", "roku": "ROKU", "spotify": "SPOT",
+        "block inc": "SQ", "square": "SQ", "paypal": "PYPL",
+        "uber": "UBER", "airbnb": "ABNB", "sea limited": "SE",
+        "duolingo": "DUOL", "super micro": "SMCI", "supermicro": "SMCI",
+        "reddit": "RDDT", "nio": "NIO", "xpeng": "XPEV",
+        "li auto": "LI", "rivian": "RIVN", "lucid": "LCID",
+        "plug power": "PLUG", "enphase": "ENPH", "marathon digital": "MARA",
+        "riot platform": "RIOT", "robinhood": "HOOD", "sofi": "SOFI",
+        "upstart": "UPST", "hims": "HIMS", "cava": "CAVA",
+        "birkenstock": "BIRK", "nokia": "NOK", "blackberry": "BB",
+        "quantumscape": "QS", "chargepoint": "CHPT", "solaredge": "SEDG",
+        "albemarle": "ALB", "siemens": "SIE", "infineon": "IFX",
+        "telekom": "DTE", "basf": "BAS", "adidas": "ADS",
+        "bmw": "BMW", "mercedes": "MBG", "volkswagen": "VOW3",
+        "allianz": "ALV", "rheinmetall": "RHM", "airbus": "AIR",
+        "asml": "ASML", "lvmh": "MC", "l'oreal": "OR", "loreal": "OR",
+        "sanofi": "SAN", "totalenergies": "TTE", "novo nordisk": "NOVO-B",
+        "amd": "AMD", "intel": "INTC", "micron": "MU", "dell": "DELL",
+        "carnival": "CCL", "delta air": "DAL", "united airlines": "UAL",
+        "southwest": "LUV", "roblox": "RBLX", "unity": "U",
+        "take-two": "TTWO", "electronic arts": "EA", "nu holdings": "NU",
+        "grab": "GRAB", "arm holdings": "ARM",
+    }
+
+    for entry in all_entries:
+        text = f"{entry.get('title', '')} {entry.get('summary', '')} {entry.get('description', '')}"
+
+        # Method 1: $TICKER pattern
         tickers = extract_tickers_from_text(text)
         for t in tickers:
             ticker_counts[t] += 1
 
+        # Method 2: Match company names in text
+        text_lower = text.lower()
+        for name, ticker in ticker_names.items():
+            if name in text_lower:
+                ticker_counts[ticker] += 1
+
+        # Method 3: Direct ticker symbol match (e.g. "PLTR" in headline)
+        for sym in SCAN_UNIVERSE:
+            clean = sym.split(".")[0]
+            if len(clean) >= 3 and f" {clean} " in f" {text} ":
+                ticker_counts[clean] += 1
+
     log_event("INFO", "underdog_agent",
-              f"RSS scan found {len(ticker_counts)} tickers in {len(all_posts)} posts")
+              f"News scan found {len(ticker_counts)} tickers in {len(all_entries)} articles")
     return ticker_counts
 
 
