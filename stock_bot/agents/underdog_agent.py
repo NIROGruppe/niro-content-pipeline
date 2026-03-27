@@ -79,6 +79,7 @@ def scan_volume_movers() -> list:
     """Scan universe for unusual volume via yfinance. Primary discovery method."""
     try:
         import yfinance as yf
+        import pandas as pd
     except ImportError:
         log_event("ERROR", "underdog_agent", "yfinance not installed")
         return []
@@ -87,54 +88,79 @@ def scan_volume_movers() -> list:
 
     results = []
 
-    def check_ticker(ticker):
-        try:
-            t = yf.Ticker(ticker)
-            info = t.info or {}
-            fast = t.fast_info
+    try:
+        # Batch download — one request for all tickers (much faster than individual)
+        data = yf.download(SCAN_UNIVERSE, period="5d", group_by="ticker", progress=False, threads=True)
 
-            price = getattr(fast, "last_price", None) or info.get("currentPrice", 0)
-            market_cap = info.get("marketCap", 0)
-            volume = info.get("volume", 0)
-            avg_volume = info.get("averageVolume", 0) or info.get("averageDailyVolume10Day", 0)
-            name = info.get("shortName", ticker)
-
-            if not price or not market_cap:
-                return None
-
-            # Market cap filter
-            if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
-                return None
-
-            volume_ratio = round(volume / avg_volume, 2) if avg_volume and avg_volume > 0 else 1.0
-
-            # Only keep stocks with notable volume (>1.2x avg)
-            if volume_ratio < 1.2:
-                return None
-
-            return {
-                "ticker": ticker,
-                "name": name,
-                "price": round(price, 2) if price else 0,
-                "market_cap": market_cap,
-                "volume": volume or 0,
-                "avg_volume": avg_volume or 0,
-                "volume_ratio": volume_ratio,
-                "sector": info.get("sector", ""),
-                "industry": info.get("industry", ""),
-            }
-        except Exception:
-            return None
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(check_ticker, t): t for t in SCAN_UNIVERSE}
-        for future in concurrent.futures.as_completed(futures):
+        # Get info for tickers with unusual volume (only those that pass the filter)
+        for ticker in SCAN_UNIVERSE:
             try:
-                result = future.result()
-                if result:
-                    results.append(result)
+                if len(SCAN_UNIVERSE) == 1:
+                    ticker_data = data
+                else:
+                    ticker_data = data[ticker] if ticker in data.columns.get_level_values(0) else None
+
+                if ticker_data is None or ticker_data.empty:
+                    continue
+
+                ticker_data = ticker_data.dropna(subset=["Close"])
+                if len(ticker_data) < 2:
+                    continue
+
+                price = float(ticker_data["Close"].iloc[-1])
+                volume = int(ticker_data["Volume"].iloc[-1])
+                avg_volume = int(ticker_data["Volume"].iloc[:-1].mean()) if len(ticker_data) > 1 else 0
+
+                if not price or not avg_volume:
+                    continue
+
+                volume_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
+                if volume_ratio < 1.2:
+                    continue
+
+                results.append({
+                    "ticker": ticker,
+                    "name": ticker,
+                    "price": round(price, 2),
+                    "market_cap": 0,
+                    "volume": volume,
+                    "avg_volume": avg_volume,
+                    "volume_ratio": volume_ratio,
+                    "sector": "",
+                    "industry": "",
+                })
             except Exception:
-                pass
+                continue
+
+        # Fetch market cap only for candidates that passed volume filter (few tickers)
+        if results:
+            log_event("INFO", "underdog_agent",
+                      f"Fetching details for {len(results)} volume movers...")
+
+            def enrich_ticker(stock):
+                try:
+                    t = yf.Ticker(stock["ticker"])
+                    info = t.info or {}
+                    market_cap = info.get("marketCap", 0)
+                    if market_cap < MIN_MARKET_CAP or market_cap > MAX_MARKET_CAP:
+                        return None
+                    stock["market_cap"] = market_cap
+                    stock["name"] = info.get("shortName", stock["ticker"])
+                    stock["sector"] = info.get("sector", "")
+                    stock["industry"] = info.get("industry", "")
+                    return stock
+                except Exception:
+                    return None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(enrich_ticker, s) for s in results]
+                results = [f.result() for f in concurrent.futures.as_completed(futures)
+                           if f.result() is not None]
+
+    except Exception as e:
+        log_event("ERROR", "underdog_agent", f"Volume scan error: {e}")
+        return []
 
     log_event("INFO", "underdog_agent",
               f"Volume scan found {len(results)} stocks with unusual volume")

@@ -927,9 +927,15 @@ def render_stock_bot():
         uc1, uc2 = st.columns([3, 1])
         with uc2:
             if st.button("🔍 Underdog Scan starten", use_container_width=True, key="underdog_scan"):
-                with st.spinner("Scanning Reddit & checking volume..."):
-                    run_underdog_scan()
-                st.success("Underdog Scan abgeschlossen!")
+                with st.spinner("Volume Scan läuft (~30s)... Danach RSS + Claude Analyse"):
+                    try:
+                        results = run_underdog_scan()
+                        if results:
+                            st.success(f"Underdog Scan abgeschlossen! {len(results)} Stocks gefunden.")
+                        else:
+                            st.warning("Keine Stocks mit ungewöhnlichem Volumen gefunden.")
+                    except Exception as e:
+                        st.error(f"Scan fehlgeschlagen: {e}")
                 st.rerun()
 
         with uc1:
