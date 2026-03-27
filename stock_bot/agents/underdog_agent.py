@@ -90,31 +90,43 @@ def scan_volume_movers() -> list:
 
     try:
         # Batch download — one request for all tickers (much faster than individual)
-        data = yf.download(SCAN_UNIVERSE, period="5d", group_by="ticker", progress=False, threads=True)
+        data = yf.download(SCAN_UNIVERSE, period="1mo", group_by="ticker", progress=False, threads=True)
 
-        # Get info for tickers with unusual volume (only those that pass the filter)
+        # Detect column format (yfinance versions differ)
+        available_tickers = set()
+        if data.columns.nlevels == 2:
+            available_tickers = set(data.columns.get_level_values(0).unique())
+
         for ticker in SCAN_UNIVERSE:
             try:
                 if len(SCAN_UNIVERSE) == 1:
                     ticker_data = data
+                elif ticker in available_tickers:
+                    ticker_data = data[ticker]
                 else:
-                    ticker_data = data[ticker] if ticker in data.columns.get_level_values(0) else None
+                    continue
 
                 if ticker_data is None or ticker_data.empty:
                     continue
 
                 ticker_data = ticker_data.dropna(subset=["Close"])
-                if len(ticker_data) < 2:
+                if len(ticker_data) < 5:
                     continue
 
+                # Use last completed trading day, compare against 20-day avg
                 price = float(ticker_data["Close"].iloc[-1])
-                volume = int(ticker_data["Volume"].iloc[-1])
-                avg_volume = int(ticker_data["Volume"].iloc[:-1].mean()) if len(ticker_data) > 1 else 0
+                last_volume = int(ticker_data["Volume"].iloc[-1])
+                avg_volume = int(ticker_data["Volume"].iloc[-21:-1].mean()) if len(ticker_data) > 5 else 0
+
+                # If last day volume seems incomplete (< 25% of avg), use second-to-last
+                if avg_volume and last_volume < avg_volume * 0.25 and len(ticker_data) > 2:
+                    last_volume = int(ticker_data["Volume"].iloc[-2])
+                    price = float(ticker_data["Close"].iloc[-2])
 
                 if not price or not avg_volume:
                     continue
 
-                volume_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+                volume_ratio = round(last_volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
                 if volume_ratio < 1.2:
                     continue
@@ -124,7 +136,7 @@ def scan_volume_movers() -> list:
                     "name": ticker,
                     "price": round(price, 2),
                     "market_cap": 0,
-                    "volume": volume,
+                    "volume": last_volume,
                     "avg_volume": avg_volume,
                     "volume_ratio": volume_ratio,
                     "sector": "",
