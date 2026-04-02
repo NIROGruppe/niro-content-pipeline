@@ -69,7 +69,7 @@ with col4:
     if st.button("Briefing Agent öffnen", use_container_width=True):
         st.switch_page("pages/4_briefing_agent.py")
 
-col5, _ = st.columns(2)
+col5, col6 = st.columns(2)
 
 with col5:
     st.markdown("""
@@ -81,6 +81,17 @@ with col5:
     """, unsafe_allow_html=True)
     if st.button("Lead Scraper öffnen", use_container_width=True):
         st.switch_page("pages/6_lead_scraper.py")
+
+with col6:
+    st.markdown("""
+    <div class="app-card">
+        <div class="icon">🎨</div>
+        <div class="title">Miro Konzept Bot</div>
+        <div class="desc">Merlin erstellt Konzepte und platziert sie automatisch visuell auf Miro Boards.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.button("Miro Konzept Bot öffnen", use_container_width=True):
+        st.switch_page("pages/7_miro_konzept.py")
 
 st.markdown("<br><br>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#333;font-size:11px;'>NIRO Media GmbH © 2026</div>",
