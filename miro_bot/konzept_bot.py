@@ -107,12 +107,9 @@ SECTION_COLORS = [
 def place_concept_on_board(board_id: str, concept: dict, progress_callback=None) -> dict:
     """Place a structured concept on a Miro board.
 
-    Args:
-        board_id: Miro board ID
-        concept: dict with title and sections from generate_concept()
-        progress_callback: optional fn(progress_float, status_text)
-
-    Returns: dict with stats (items_created, frame_id, board_url)
+    All positions use Miro's center-origin coordinate system.
+    Layout: Title bar on top, then section columns below it.
+    Each column has a colored header shape + sticky notes stacked vertically.
     """
     from miro_bot.miro_api import (
         get_board_items, find_free_area, create_frame,
@@ -125,99 +122,116 @@ def place_concept_on_board(board_id: str, concept: dict, progress_callback=None)
 
     update(0.1, "Board-Elemente laden...")
 
-    # Find free space
     existing_items = get_board_items(board_id)
-    start_x, start_y = find_free_area(existing_items)
+    origin_x, origin_y = find_free_area(existing_items)
 
     sections = concept.get("sections", [])
     title = concept.get("title", "Konzept")
 
-    # Layout constants
+    # ── Layout config ──
+    col_width = 350          # width of each section column
+    col_gap = 50             # horizontal gap between columns
+    header_h = 70            # section header height
+    sticky_w = 320           # sticky note width
+    sticky_h = 200           # sticky note height (Miro auto-sizes, this is approx)
+    sticky_gap = 30          # vertical gap between stickies
+    title_h = 80             # title bar height
+    title_margin = 40        # gap between title and sections
+    padding = 60             # frame padding around content
+
     cols = min(len(sections), 3)
-    col_width = 380
-    col_gap = 40
-    header_height = 80
-    sticky_height = 150
-    sticky_gap = 20
-    frame_padding = 60
+    rows = (len(sections) + cols - 1) // cols if cols else 1
+    max_points = max((len(s.get("points", [])) for s in sections), default=3)
 
-    # Calculate max stickies in any column to size the frame
-    max_points = max(len(s.get("points", [])) for s in sections) if sections else 3
-    rows = (len(sections) + cols - 1) // cols
+    # Calculate frame dimensions
+    content_w = cols * col_width + (cols - 1) * col_gap
+    col_content_h = header_h + sticky_gap + max_points * (sticky_h + sticky_gap)
+    content_h = title_h + title_margin + rows * (col_content_h + col_gap)
+    frame_w = content_w + padding * 2
+    frame_h = content_h + padding * 2
 
-    total_width = cols * col_width + (cols - 1) * col_gap + frame_padding * 2
-    row_height = header_height + max_points * (sticky_height + sticky_gap) + 60
-    total_height = 120 + rows * row_height + frame_padding
+    # Frame center (Miro positions frames by center)
+    frame_cx = origin_x + frame_w // 2
+    frame_cy = origin_y + frame_h // 2
+
+    # Content top-left corner (for placing items inside)
+    content_left = origin_x + padding
+    content_top = origin_y + padding
 
     update(0.2, "Frame erstellen...")
 
-    # Create main frame
-    frame = create_frame(board_id, start_x, start_y, total_width, total_height, title)
+    frame = create_frame(board_id, origin_x, origin_y, frame_w, frame_h, title)
     frame_id = frame.get("id", "")
 
-    # Title shape
-    title_shape = create_shape(
+    # ── Title bar (centered horizontally, at top of content) ──
+    title_cx = content_left + content_w // 2
+    title_cy = content_top + title_h // 2
+
+    create_shape(
         board_id,
-        x=start_x + total_width // 2,
-        y=start_y + 50,
-        width=total_width - frame_padding * 2,
-        height=70,
+        x=title_cx, y=title_cy,
+        width=content_w, height=title_h,
         content=f"<strong>{title}</strong>",
         fill_color="#1a1a2e",
         text_color="#ffffff",
-        font_size="28",
+        font_size="24",
     )
 
-    items_created = 2  # frame + title
+    items_created = 2
     total_steps = 2 + len(sections) + sum(len(s.get("points", [])) for s in sections)
 
-    # Place sections
-    all_section_shape_ids = []
+    # ── Y start for section columns (below title) ──
+    sections_top = content_top + title_h + title_margin
 
     for i, section in enumerate(sections):
         col = i % cols
         row = i // cols
         color = SECTION_COLORS[i % len(SECTION_COLORS)]
 
-        # Section position
-        sec_x = start_x + frame_padding + col * (col_width + col_gap) + col_width // 2
-        sec_y = start_y + 120 + row * row_height + header_height // 2
+        # Column center X
+        col_cx = content_left + col * (col_width + col_gap) + col_width // 2
+
+        # Row top Y
+        row_top = sections_top + row * (col_content_h + col_gap)
 
         update(items_created / total_steps, f"Abschnitt: {section['heading'][:30]}...")
 
-        # Section header shape
+        # ── Section header ──
+        header_cy = row_top + header_h // 2
+
         sec_shape = create_shape(
             board_id,
-            x=sec_x, y=sec_y,
-            width=col_width, height=header_height,
+            x=col_cx, y=header_cy,
+            width=col_width, height=header_h,
             content=f"<strong>{section['heading']}</strong>",
             fill_color=color["shape"],
             text_color="#ffffff",
-            font_size="16",
+            font_size="14",
         )
         sec_shape_id = sec_shape.get("id", "")
-        all_section_shape_ids.append(sec_shape_id)
         items_created += 1
 
-        # Sticky notes for each point
+        # ── Sticky notes below header ──
         prev_id = sec_shape_id
+        first_sticky_top = row_top + header_h + sticky_gap
+
         for j, point in enumerate(section.get("points", [])):
-            sticky_y = sec_y + header_height // 2 + 30 + j * (sticky_height + sticky_gap) + sticky_height // 2
+            sticky_cy = first_sticky_top + j * (sticky_h + sticky_gap) + sticky_h // 2
 
             update(items_created / total_steps, f"  → {point[:40]}...")
 
             sticky = create_sticky_note(
                 board_id,
-                x=sec_x, y=sticky_y,
+                x=col_cx, y=sticky_cy,
                 content=point,
                 color=color["sticky"],
-                width=col_width - 20,
+                width=sticky_w,
             )
             sticky_id = sticky.get("id", "")
             items_created += 1
 
-            # Connect to header or previous sticky
-            if prev_id:
+            # Arrow from header → first sticky, then sticky → sticky
+            if prev_id and sticky_id:
                 try:
                     create_connector(board_id, prev_id, sticky_id, color=color["shape"])
                     items_created += 1
