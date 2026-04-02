@@ -23,17 +23,80 @@ LANGDOCK_AGENT_ID = _secret("LANGDOCK_AGENT_ID")
 LANGDOCK_URL = "https://api.langdock.com/agent/v1/chat/completions"
 
 
-def generate_concept(thema: str, kontext: str = "") -> dict:
+CONCEPT_TYPES = {
+    "grobkonzept": {
+        "label": "Grobkonzept",
+        "description": "Überblick mit strategischen Eckpfeilern, Zielen und groben Maßnahmen",
+        "sections_hint": "3-5 Abschnitte mit jeweils 2-4 strategischen Punkten. Fokus auf das große Bild.",
+    },
+    "feinkonzept": {
+        "label": "Feinkonzept",
+        "description": "Detailliertes Konzept mit konkreten Maßnahmen, Timelines und Verantwortlichkeiten",
+        "sections_hint": "5-8 Abschnitte mit jeweils 3-6 detaillierten, umsetzbaren Punkten. Konkret und spezifisch.",
+    },
+    "reels": {
+        "label": "Reels-Konzept",
+        "description": "Konzept für Social Media Reels/Kurzvideos mit Hooks, Szenen und CTAs",
+        "sections_hint": "4-6 Abschnitte (z.B. Hook-Ideen, Szenenaufbau, Storytelling, CTAs, Musik/Sound). Jeder Punkt beschreibt eine konkrete Reel-Idee oder Szene.",
+    },
+}
+
+
+def generate_concept(thema: str, concept_type: str = "grobkonzept",
+                     profile: dict = None, kontext: str = "",
+                     file_text: str = "") -> dict:
     """Ask Merlin (Langdock) to generate a structured concept.
 
-    Returns dict with: title, sections (list of {heading, points, color}).
+    Args:
+        thema: Main topic/brief
+        concept_type: One of CONCEPT_TYPES keys
+        profile: Customer profile dict (optional)
+        kontext: Additional context text (optional)
+        file_text: Extracted text from uploaded files (optional)
+
+    Returns dict with: title, sections (list of {heading, points}).
     """
     if not LANGDOCK_API_KEY or not LANGDOCK_AGENT_ID:
         raise RuntimeError("LANGDOCK_API_KEY oder LANGDOCK_AGENT_ID nicht konfiguriert")
 
-    prompt = f"""Erstelle ein strukturiertes Konzept zum Thema: "{thema}"
+    ctype = CONCEPT_TYPES.get(concept_type, CONCEPT_TYPES["grobkonzept"])
+
+    # Build profile context
+    profile_block = ""
+    if profile:
+        parts = []
+        if profile.get("name"):
+            parts.append(f"Kunde: {profile['name']}")
+        if profile.get("industry"):
+            parts.append(f"Branche: {profile['industry']}")
+        if profile.get("target_audience"):
+            parts.append(f"Zielgruppe: {profile['target_audience']}")
+        if profile.get("tone"):
+            parts.append(f"Tonalität: {profile['tone']}")
+        if profile.get("values"):
+            parts.append(f"Werte: {profile['values']}")
+        if profile.get("notes"):
+            parts.append(f"Hinweise: {profile['notes']}")
+        if parts:
+            profile_block = "Kundenprofil:\n" + "\n".join(parts)
+
+    prompt = f"""Erstelle ein {ctype['label']} zum Thema: "{thema}"
+
+Typ: {ctype['description']}
+
+{profile_block}
 
 {f"Zusätzlicher Kontext: {kontext}" if kontext else ""}
+
+{f"Dokument-Inhalt (z.B. Stellenanzeige, Briefing):\n{file_text[:6000]}" if file_text else ""}
+
+WICHTIGE REGELN für die Texte:
+- Schreibe natürlich und menschlich, KEINE AI-Sprache
+- KEINE Gedankenstriche am Satzanfang
+- KEINE Aufzählungszeichen oder Bulletpoints im Text
+- Formuliere in ganzen, kurzen Sätzen
+- Direkt, klar und auf den Punkt
+- Kein Marketingsprech, keine Floskeln
 
 Antworte NUR mit validem JSON in diesem Format:
 {{
@@ -41,16 +104,12 @@ Antworte NUR mit validem JSON in diesem Format:
     "sections": [
         {{
             "heading": "Abschnitts-Überschrift",
-            "points": ["Punkt 1", "Punkt 2", "Punkt 3"]
-        }},
-        {{
-            "heading": "Nächster Abschnitt",
-            "points": ["Punkt 1", "Punkt 2"]
+            "points": ["Erster Punkt als ganzer Satz", "Zweiter Punkt als ganzer Satz"]
         }}
     ]
 }}
 
-Erstelle 4-6 Abschnitte mit jeweils 2-5 konkreten, actionable Punkten.
+{ctype['sections_hint']}
 Kein Markdown, kein Erklärtext — NUR das JSON."""
 
     headers = {
