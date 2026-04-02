@@ -88,18 +88,26 @@ if selected_profile:
         with cols[2]:
             st.caption(f"**Werte:** {selected_profile.get('values', '—')}")
 
-# Topic
-thema = st.text_input(
-    "Konzept-Thema / Briefing",
-    placeholder="z.B. Employer Branding Video für Pflegekräfte-Recruiting...",
-)
+# Videos
+st.markdown('<div class="section-label">🎬 Videos</div>', unsafe_allow_html=True)
+
+num_videos = st.slider("Anzahl Videos", min_value=1, max_value=10, value=1)
+
+video_themen = []
+for v in range(num_videos):
+    thema_input = st.text_input(
+        f"Video {v + 1} — Thema",
+        placeholder="z.B. Employer Branding Video für Pflegekräfte-Recruiting...",
+        key=f"video_thema_{v}",
+    )
+    video_themen.append(thema_input)
 
 # File upload + Context
 c3, c4 = st.columns(2)
 
 with c3:
     uploaded_files = st.file_uploader(
-        "Dateien (optional)",
+        "Dateien (optional, gelten für alle Videos)",
         type=["pdf", "txt"],
         accept_multiple_files=True,
         help="z.B. Stellenanzeigen, Briefings, Referenzen",
@@ -107,7 +115,7 @@ with c3:
 
 with c4:
     kontext = st.text_area(
-        "Zusätzlicher Kontext (optional)",
+        "Zusätzlicher Kontext (optional, gilt für alle Videos)",
         placeholder="Besondere Anforderungen, Ziele, Hinweise...",
         height=130,
     )
@@ -116,9 +124,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ─── GENERATE ─────────────────────────────────────────────────────────────
 
-can_generate = board_input and thema and templates and selected_template
+has_themen = any(t.strip() for t in video_themen)
+can_generate = board_input and has_themen and templates and selected_template
 
-if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_width=True,
+if st.button("🚀 Konzepte erstellen & auf Board platzieren", use_container_width=True,
              type="primary", disabled=not can_generate):
 
     from miro_bot.miro_api import parse_board_id, MIRO_API_TOKEN
@@ -144,56 +153,70 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
             elif uf.name.endswith(".txt"):
                 file_text += uf.read().decode("utf-8", errors="ignore") + "\n\n"
 
-    # Step 1: Generate content via Merlin
-    with st.spinner(f"🧠 Merlin füllt {selected_template} aus..."):
+    # Filter out empty themen
+    active_themen = [(i, t) for i, t in enumerate(video_themen) if t.strip()]
+    total_videos = len(active_themen)
+    total_created = 0
+    total_fields = 0
+
+    for idx, (video_num, thema) in enumerate(active_themen):
+        st.markdown(f"### 🎬 Video {video_num + 1}: {thema}")
+
+        # Step 1: Generate content via Merlin
+        with st.spinner(f"🧠 Merlin füllt Video {video_num + 1}/{total_videos} aus..."):
+            try:
+                generated = generate_content_for_fields(
+                    fields=fields,
+                    thema=thema,
+                    template_name=selected_template,
+                    profile=selected_profile,
+                    kontext=kontext,
+                    file_text=file_text.strip(),
+                )
+            except Exception as e:
+                st.error(f"Video {video_num + 1} fehlgeschlagen: {e}")
+                continue
+
+        # Show preview
+        for label, content in generated.items():
+            with st.expander(f"{label}", expanded=False):
+                st.write(content)
+
+        # Step 2: Place on Miro board
+        progress = st.progress(0, text=f"📐 Video {video_num + 1} auf Board platzieren...")
+
         try:
-            generated = generate_content_for_fields(
-                fields=fields,
-                thema=thema,
+            result = place_template_on_board(
+                target_board_id=board_id,
                 template_name=selected_template,
-                profile=selected_profile,
-                kontext=kontext,
-                file_text=file_text.strip(),
+                generated_content=generated,
+                templates=templates,
+                progress_callback=lambda pct, text: progress.progress(min(pct, 1.0), text=text),
             )
+            progress.empty()
+            total_created += result["items_created"]
+            total_fields += result["fields_filled"]
+            st.success(f"✅ Video {video_num + 1} platziert ({result['items_created']} Elemente)")
+
         except Exception as e:
-            st.error(f"Konzept-Generierung fehlgeschlagen: {e}")
-            st.stop()
+            progress.empty()
+            st.error(f"Video {video_num + 1} Platzierung fehlgeschlagen: {e}")
 
-    # Show preview
-    st.markdown("### 📋 Generierte Inhalte")
-    for label, content in generated.items():
-        with st.expander(label, expanded=True):
-            st.write(content)
+        st.markdown("---")
 
-    st.markdown("---")
-
-    # Step 2: Place on Miro board
-    progress = st.progress(0, text="📐 Board wird vorbereitet...")
-
-    try:
-        result = place_template_on_board(
-            target_board_id=board_id,
-            template_name=selected_template,
-            generated_content=generated,
-            templates=templates,
-            progress_callback=lambda pct, text: progress.progress(min(pct, 1.0), text=text),
-        )
-
-        progress.empty()
+    # Final summary
+    if total_created > 0:
         st.success(
-            f"✅ **{result['template_name']}** erfolgreich platziert! "
-            f"({result['items_created']} Elemente, {result['fields_filled']} Felder gefüllt)"
+            f"🎉 **{total_videos} Videos** erfolgreich auf Board platziert! "
+            f"({total_created} Elemente, {total_fields} Felder gefüllt)"
         )
+        board_url = f"https://miro.com/app/board/{board_id}/"
         st.markdown(
-            f'<a href="{result["board_url"]}" target="_blank" '
+            f'<a href="{board_url}" target="_blank" '
             f'style="display:inline-block;background:#ffd02f;color:#1a1a2e;padding:12px 24px;'
             f'border-radius:8px;text-decoration:none;font-weight:700;margin-top:8px;">'
             f'🔗 Board öffnen</a>',
             unsafe_allow_html=True,
         )
-
-    except Exception as e:
-        progress.empty()
-        st.error(f"Miro-Platzierung fehlgeschlagen: {e}")
 
 st.markdown("<br><br>", unsafe_allow_html=True)
