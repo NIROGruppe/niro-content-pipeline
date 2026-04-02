@@ -233,11 +233,12 @@ def run_research(industry: str, video_themen: list,
 # ─── GENERATE VIDEO IDEAS ────────────────────────────────────────────────
 
 def generate_video_ideas(research: dict, video_themen: list,
+                         ideas_per_video: int = 3,
                          profile: dict = None, kontext: str = "",
                          file_text: str = "") -> list:
-    """Use Merlin to generate short video ideas based on research + themen.
+    """Use Merlin to generate multiple short video ideas per theme.
 
-    Returns list of dicts: [{video_num, thema, idea_title, idea_summary, inspiration}]
+    Returns list of dicts: [{video_num, thema, idea_num, idea_title, idea_summary, inspiration}]
     """
     import re
 
@@ -298,10 +299,13 @@ Branchennews & Trends:
 === VIDEOS ===
 {themen_list}
 
-Erstelle für JEDES Video eine kurze Idee mit:
+Erstelle für JEDES Video genau {ideas_per_video} verschiedene Ideen.
+Jede Idee besteht aus:
 - Arbeitstitel (knackig, 3-6 Worte)
 - Kernidee (2-3 Sätze, was passiert im Video, welches Gefühl, welche Story)
 - Inspiration (welcher Trend oder welche Referenz hat die Idee inspiriert)
+
+Die Ideen pro Video sollen sich deutlich unterscheiden (verschiedene Ansätze, Stile, Perspektiven).
 
 REGELN:
 - Natürlich und menschlich formulieren
@@ -312,6 +316,7 @@ Antworte NUR mit validem JSON Array:
 [
     {{
         "video_num": 1,
+        "idea_num": 1,
         "thema": "Originalthema",
         "idea_title": "Kurzer Arbeitstitel",
         "idea_summary": "2-3 Sätze Kernidee",

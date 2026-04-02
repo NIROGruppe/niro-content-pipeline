@@ -81,6 +81,9 @@ with c4:
         height=130,
     )
 
+ideas_per_video = st.slider("Ideen pro Video", min_value=1, max_value=5, value=3,
+                            help="Merlin generiert mehrere Ideen pro Video — du wählst die besten aus.")
+
 st.markdown("---")
 
 # ─── STEP 2: RESEARCH + IDEAS ────────────────────────────────────────────
@@ -174,11 +177,12 @@ if st.button("🔍 Research starten & Ideen generieren", use_container_width=Tru
     st.markdown("---")
 
     # Generate ideas
-    with st.spinner("🧠 Merlin entwickelt Video-Ideen..."):
+    with st.spinner(f"🧠 Merlin entwickelt {ideas_per_video} Ideen pro Video..."):
         try:
             ideas = generate_video_ideas(
                 research=research,
                 video_themen=active_themen,
+                ideas_per_video=ideas_per_video,
                 profile=selected_profile,
                 kontext=kontext,
                 file_text=file_text.strip(),
@@ -188,22 +192,7 @@ if st.button("🔍 Research starten & Ideen generieren", use_container_width=Tru
             st.stop()
 
     st.session_state["video_ideas"] = ideas
-
-    st.markdown("### 💡 Video-Ideen")
-    for idea in ideas:
-        vnum = idea.get("video_num", "?")
-        st.markdown(
-            f'<div style="background:#1e1e1e;border:1px solid #2a2a2a;border-radius:12px;'
-            f'padding:20px;margin-bottom:12px;">'
-            f'<div style="font-size:11px;color:#888;">Video {vnum} · {idea.get("thema", "")}</div>'
-            f'<div style="font-size:18px;font-weight:700;margin:6px 0;">{idea.get("idea_title", "")}</div>'
-            f'<div style="font-size:14px;color:#ccc;margin-bottom:8px;">{idea.get("idea_summary", "")}</div>'
-            f'<div style="font-size:12px;color:#888;">Inspiration: {idea.get("inspiration", "")}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.success(f"✅ {len(ideas)} Video-Ideen generiert. Prüfe die Ideen und klicke unten auf 'Konzepte erstellen'.")
+    st.rerun()
 
 st.markdown("---")
 
@@ -212,18 +201,69 @@ st.markdown("---")
 ideas = st.session_state.get("video_ideas", [])
 research = st.session_state.get("research", {})
 
-if ideas and templates and selected_template and board_input:
-    st.markdown('<div class="section-label">✅ Konzepte erstellen</div>', unsafe_allow_html=True)
-    st.caption(f"{len(ideas)} Video-Ideen bereit · Template: {selected_template}")
+if ideas:
+    st.markdown('<div class="section-label">💡 Video-Ideen auswählen</div>', unsafe_allow_html=True)
 
-    if st.button("🚀 Ideen approved — Konzepte erstellen & auf Board platzieren",
-                 use_container_width=True, type="primary"):
+    # Group ideas by video_num
+    from collections import defaultdict
+    ideas_by_video = defaultdict(list)
+    for idea in ideas:
+        ideas_by_video[idea.get("video_num", 1)].append(idea)
 
+    # Show ideas with checkboxes
+    for vnum in sorted(ideas_by_video.keys()):
+        video_ideas = ideas_by_video[vnum]
+        thema = video_ideas[0].get("thema", "") if video_ideas else ""
+        st.markdown(f"**Video {vnum}: {thema}**")
+
+        for i, idea in enumerate(video_ideas):
+            idea_num = idea.get("idea_num", i + 1)
+            key = f"idea_{vnum}_{idea_num}"
+            col_check, col_content = st.columns([0.05, 0.95])
+            with col_check:
+                checked = st.checkbox("", key=key, label_visibility="collapsed")
+            with col_content:
+                title = idea.get("idea_title", "")
+                summary = idea.get("idea_summary", "")
+                inspiration = idea.get("inspiration", "")
+                border_color = "#2ecc71" if checked else "#2a2a2a"
+                st.markdown(
+                    f'<div style="background:#1e1e1e;border:2px solid {border_color};border-radius:12px;'
+                    f'padding:16px;margin-bottom:8px;">'
+                    f'<div style="font-size:16px;font-weight:700;">{title}</div>'
+                    f'<div style="font-size:13px;color:#ccc;margin:6px 0;">{summary}</div>'
+                    f'<div style="font-size:11px;color:#888;">Inspiration: {inspiration}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("")
+
+    # Collect selected ideas
+    selected_ideas = []
+    for vnum in sorted(ideas_by_video.keys()):
+        for i, idea in enumerate(ideas_by_video[vnum]):
+            idea_num = idea.get("idea_num", i + 1)
+            key = f"idea_{vnum}_{idea_num}"
+            if st.session_state.get(key, False):
+                selected_ideas.append(idea)
+
+    st.markdown("---")
+
+    # Generate button
+    can_generate = selected_ideas and templates and selected_template and board_input
+    n_selected = len(selected_ideas)
+
+    if st.button(
+        f"🚀 {n_selected} Idee{'n' if n_selected != 1 else ''} approved — Konzepte erstellen",
+        use_container_width=True, type="primary",
+        disabled=not can_generate,
+    ):
         from miro_bot.miro_api import parse_board_id, MIRO_API_TOKEN
         from miro_bot.template_bot import generate_content_for_fields, place_template_on_board
 
         if not MIRO_API_TOKEN:
-            st.error("⚠️ `MIRO_API_TOKEN` nicht konfiguriert.")
+            st.error("MIRO_API_TOKEN nicht konfiguriert.")
             st.stop()
 
         board_id = parse_board_id(board_input)
@@ -234,18 +274,20 @@ if ideas and templates and selected_template and board_input:
         total_created = 0
         total_fields = 0
 
-        for idea in ideas:
+        for idx, idea in enumerate(selected_ideas):
             vnum = idea.get("video_num", "?")
+            idea_num = idea.get("idea_num", "?")
             thema = idea.get("thema", "")
+            title = idea.get("idea_title", thema)
             idea_context = (
                 f"Arbeitstitel: {idea.get('idea_title', '')}\n"
                 f"Kernidee: {idea.get('idea_summary', '')}\n"
                 f"Inspiration: {idea.get('inspiration', '')}"
             )
 
-            st.markdown(f"### 🎬 Video {vnum}: {idea.get('idea_title', thema)}")
+            st.markdown(f"### 🎬 Video {vnum} / Idee {idea_num}: {title}")
 
-            with st.spinner(f"🧠 Merlin erstellt Konzept für Video {vnum}..."):
+            with st.spinner(f"🧠 Merlin erstellt Konzept ({idx+1}/{n_selected})..."):
                 try:
                     full_kontext = f"{kontext}\n\n{idea_context}" if kontext else idea_context
                     generated = generate_content_for_fields(
@@ -257,14 +299,14 @@ if ideas and templates and selected_template and board_input:
                         file_text=file_text.strip(),
                     )
                 except Exception as e:
-                    st.error(f"Video {vnum} fehlgeschlagen: {e}")
+                    st.error(f"Konzept fehlgeschlagen: {e}")
                     continue
 
             for label, content in generated.items():
-                with st.expander(f"{label}", expanded=False):
+                with st.expander(label, expanded=False):
                     st.write(content)
 
-            progress = st.progress(0, text=f"📐 Video {vnum} auf Board platzieren...")
+            progress = st.progress(0, text=f"📐 Auf Board platzieren...")
             try:
                 result = place_template_on_board(
                     target_board_id=board_id,
@@ -276,16 +318,16 @@ if ideas and templates and selected_template and board_input:
                 progress.empty()
                 total_created += result["items_created"]
                 total_fields += result["fields_filled"]
-                st.success(f"✅ Video {vnum} platziert")
+                st.success(f"✅ Platziert")
             except Exception as e:
                 progress.empty()
-                st.error(f"Video {vnum} Platzierung fehlgeschlagen: {e}")
+                st.error(f"Platzierung fehlgeschlagen: {e}")
 
             st.markdown("---")
 
         if total_created > 0:
             board_url = f"https://miro.com/app/board/{board_id}/"
-            st.success(f"🎉 **{len(ideas)} Videos** erfolgreich platziert!")
+            st.success(f"🎉 **{n_selected} Konzept{'e' if n_selected != 1 else ''}** erfolgreich platziert!")
             st.markdown(
                 f'<a href="{board_url}" target="_blank" '
                 f'style="display:inline-block;background:#ffd02f;color:#1a1a2e;padding:12px 24px;'
@@ -294,7 +336,6 @@ if ideas and templates and selected_template and board_input:
                 unsafe_allow_html=True,
             )
 
-        # Clear state after placement
         st.session_state.pop("video_ideas", None)
         st.session_state.pop("research", None)
 
