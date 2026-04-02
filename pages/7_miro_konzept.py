@@ -1,5 +1,6 @@
 """
 Miro Konzept Bot — Merlin generiert Konzepte, Bot platziert sie visuell auf Miro Boards.
+Supports: Template-based (from template board) or freeform concept generation.
 """
 import streamlit as st
 from shared import inject_css, load_profiles, extract_text_from_pdf
@@ -20,28 +21,54 @@ st.markdown("---")
 
 st.markdown('<div class="section-label">⚙️ Konfiguration</div>', unsafe_allow_html=True)
 
-# Row 1: Board + Concept Type
-c1, c2 = st.columns([2, 1])
+board_input = st.text_input(
+    "Ziel Miro Board (URL oder ID)",
+    placeholder="https://miro.com/app/board/uXjVK1234=/ oder Board-ID",
+)
 
-with c1:
-    board_input = st.text_input(
-        "Miro Board (URL oder ID)",
-        placeholder="https://miro.com/app/board/uXjVK1234=/ oder Board-ID",
+# Template selection
+st.markdown('<div class="section-label">📐 Template</div>', unsafe_allow_html=True)
+
+# Load templates from template board
+if "miro_templates" not in st.session_state:
+    st.session_state["miro_templates"] = None
+
+if st.button("🔄 Templates laden", use_container_width=False):
+    with st.spinner("Templates vom Template-Board laden..."):
+        try:
+            from miro_bot.template_bot import read_templates
+            templates = read_templates()
+            st.session_state["miro_templates"] = templates
+            st.rerun()
+        except Exception as e:
+            st.error(f"Templates laden fehlgeschlagen: {e}")
+
+templates = st.session_state.get("miro_templates")
+
+if templates:
+    template_names = list(templates.keys())
+    selected_template = st.selectbox(
+        "Template auswählen",
+        options=template_names,
     )
 
-with c2:
-    CONCEPT_TYPE_OPTIONS = {
-        "grobkonzept": "Grobkonzept — Überblick mit strategischen Eckpfeilern",
-        "feinkonzept": "Feinkonzept — Detailliert mit konkreten Maßnahmen",
-        "reels": "Reels-Konzept — Hooks, Szenen und CTAs",
-    }
-    concept_type = st.selectbox(
-        "Konzept-Typ",
-        options=list(CONCEPT_TYPE_OPTIONS.keys()),
-        format_func=lambda k: CONCEPT_TYPE_OPTIONS[k],
-    )
+    # Show template fields
+    if selected_template and selected_template in templates:
+        tpl = templates[selected_template]
+        fields = tpl.get("fields", [])
+        if fields:
+            with st.expander(f"Felder im Template ({len(fields)})", expanded=False):
+                for f in fields:
+                    label = f.get("label", "Unbekannt")
+                    color = f.get("fill_color", "")
+                    st.caption(f"🔲 {label} ({color})")
+        else:
+            st.info("Keine leeren Felder im Template gefunden.")
+else:
+    st.info("Klicke 'Templates laden' um die verfügbaren Vorlagen zu sehen.")
+    selected_template = None
 
-# Row 2: Customer Profile
+# Customer Profile
 profiles = load_profiles()
 profile_options = {"(Kein Profil)": None}
 profile_options.update({p.get("name", slug): p for slug, p in profiles.items()})
@@ -61,19 +88,19 @@ if selected_profile:
         with cols[2]:
             st.caption(f"**Werte:** {selected_profile.get('values', '—')}")
 
-# Row 3: Topic
+# Topic
 thema = st.text_input(
     "Konzept-Thema / Briefing",
-    placeholder="z.B. Social Media Strategie, Employer Branding Kampagne, Reel-Serie für Recruiting...",
+    placeholder="z.B. Employer Branding Video für Pflegekräfte-Recruiting...",
 )
 
-# Row 4: File upload + Context
+# File upload + Context
 c3, c4 = st.columns(2)
 
 with c3:
     uploaded_files = st.file_uploader(
         "Dateien (optional)",
-        type=["pdf", "txt", "docx"],
+        type=["pdf", "txt"],
         accept_multiple_files=True,
         help="z.B. Stellenanzeigen, Briefings, Referenzen",
     )
@@ -89,17 +116,21 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ─── GENERATE ─────────────────────────────────────────────────────────────
 
+can_generate = board_input and thema and templates and selected_template
+
 if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_width=True,
-             type="primary", disabled=(not board_input or not thema)):
+             type="primary", disabled=not can_generate):
 
     from miro_bot.miro_api import parse_board_id, MIRO_API_TOKEN
-    from miro_bot.konzept_bot import generate_concept, place_concept_on_board
+    from miro_bot.template_bot import generate_content_for_fields, place_template_on_board
 
     if not MIRO_API_TOKEN:
         st.error("⚠️ `MIRO_API_TOKEN` nicht konfiguriert.")
         st.stop()
 
     board_id = parse_board_id(board_input)
+    tpl = templates[selected_template]
+    fields = tpl.get("fields", [])
 
     # Extract text from uploaded files
     file_text = ""
@@ -113,12 +144,13 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
             elif uf.name.endswith(".txt"):
                 file_text += uf.read().decode("utf-8", errors="ignore") + "\n\n"
 
-    # Step 1: Generate concept via Merlin
-    with st.spinner(f"🧠 Merlin erstellt {CONCEPT_TYPE_OPTIONS[concept_type].split(' —')[0]}..."):
+    # Step 1: Generate content via Merlin
+    with st.spinner(f"🧠 Merlin füllt {selected_template} aus..."):
         try:
-            concept = generate_concept(
+            generated = generate_content_for_fields(
+                fields=fields,
                 thema=thema,
-                concept_type=concept_type,
+                template_name=selected_template,
                 profile=selected_profile,
                 kontext=kontext,
                 file_text=file_text.strip(),
@@ -128,13 +160,10 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
             st.stop()
 
     # Show preview
-    st.markdown("### 📋 Konzept-Vorschau")
-    st.markdown(f"**{concept.get('title', 'Konzept')}**")
-
-    for section in concept.get("sections", []):
-        with st.expander(section["heading"], expanded=True):
-            for point in section.get("points", []):
-                st.markdown(f"  {point}")
+    st.markdown("### 📋 Generierte Inhalte")
+    for label, content in generated.items():
+        with st.expander(label, expanded=True):
+            st.write(content)
 
     st.markdown("---")
 
@@ -142,15 +171,18 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
     progress = st.progress(0, text="📐 Board wird vorbereitet...")
 
     try:
-        result = place_concept_on_board(
-            board_id, concept,
+        result = place_template_on_board(
+            target_board_id=board_id,
+            template_name=selected_template,
+            generated_content=generated,
+            templates=templates,
             progress_callback=lambda pct, text: progress.progress(min(pct, 1.0), text=text),
         )
 
         progress.empty()
         st.success(
-            f"✅ {CONCEPT_TYPE_OPTIONS[concept_type].split(' —')[0]} **\"{result['title']}\"** erfolgreich platziert! "
-            f"({result['items_created']} Elemente, {result['sections']} Abschnitte)"
+            f"✅ **{result['template_name']}** erfolgreich platziert! "
+            f"({result['items_created']} Elemente, {result['fields_filled']} Felder gefüllt)"
         )
         st.markdown(
             f'<a href="{result["board_url"]}" target="_blank" '
