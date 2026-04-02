@@ -145,13 +145,18 @@ if st.button("🔍 Research starten & Ideen generieren", use_container_width=Tru
         st.markdown(f"**Meta Ads Library** ({len(research['meta_ads'])})")
         for m in research["meta_ads"][:5]:
             platforms = ", ".join(m.get("platforms", [])) if m.get("platforms") else ""
+            ad_format = m.get("format", "")
+            ad_text = m.get("ad_text", "")[:100]
+            cta = m.get("cta", "")
+            page_name = m.get("page_name", "?")
+            format_str = f" · {ad_format}" if ad_format else ""
+            platform_str = f" · {platforms}" if platforms else ""
+            cta_str = f"CTA: {cta}" if cta else ""
             st.markdown(
                 f'<div style="background:#1e1e1e;border-radius:8px;padding:10px;margin-bottom:6px;font-size:12px;">'
-                f'<b>{m.get("page_name", "?")}</b>'
-                f'{f" · {platforms}" if platforms else ""}'
-                f'{f" · {m.get(\"format\", \"\")}" if m.get("format") else ""}<br>'
-                f'{m.get("ad_text", "")[:100]}...<br>'
-                f'{f"CTA: {m[\"cta\"]}" if m.get("cta") else ""}'
+                f'<b>{page_name}</b>{platform_str}{format_str}<br>'
+                f'{ad_text}...<br>'
+                f'{cta_str}'
                 f'</div>', unsafe_allow_html=True
             )
 
