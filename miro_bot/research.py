@@ -21,6 +21,7 @@ def _secret(key: str, default: str = "") -> str:
 APIFY_API_TOKEN = _secret("APIFY_API_TOKEN")
 APIFY_TIKTOK_ACTOR = "clockworks~tiktok-scraper"
 APIFY_GOOGLE_ACTOR = "nFJndFXA5zjCTuudP"
+APIFY_META_ADS_ACTOR = "easyapi~facebook-ads-library-scraper"
 LANGDOCK_API_KEY = _secret("LANGDOCK_API_KEY")
 LANGDOCK_AGENT_ID = _secret("LANGDOCK_AGENT_ID")
 LANGDOCK_URL = "https://api.langdock.com/agent/v1/chat/completions"
@@ -76,47 +77,67 @@ def scrape_tiktok(queries: list, max_per_query: int = 5) -> list:
 # ─── META ADS LIBRARY ─────────────────────────────────────────────────────
 
 def scrape_meta_ads(query: str, max_results: int = 10) -> list:
-    """Search Meta Ad Library via Google for ad examples in the industry."""
+    """Search the actual Meta Ads Library via Apify for active ads.
+
+    Uses easyapi/facebook-ads-library-scraper to query the real Meta Ad Library.
+    Returns ad text, page name, CTA, format, and platforms.
+    """
     if not APIFY_API_TOKEN:
         return []
 
     run_url = (
-        f"https://api.apify.com/v2/acts/{APIFY_GOOGLE_ACTOR}/runs"
-        f"?token={APIFY_API_TOKEN}&waitForFinish=120"
+        f"https://api.apify.com/v2/acts/{APIFY_META_ADS_ACTOR}/runs"
+        f"?token={APIFY_API_TOKEN}&waitForFinish=90"
     )
     payload = {
-        "queries": f"{query} site:facebook.com/ads/library\n{query} Meta Ad Library\n{query} Facebook Werbung Beispiel",
-        "maxPagesPerQuery": 1,
-        "resultsPerPage": 10,
-        "languageCode": "de",
-        "countryCode": "de",
+        "search_query": query,
+        "country": "DE",
+        "ad_type": "all",
+        "active_status": "active",
+        "max_ads": max_results,
     }
 
     try:
-        resp = requests.post(run_url, json=payload, timeout=130)
+        resp = requests.post(run_url, json=payload, timeout=100)
         resp.raise_for_status()
         dataset_id = resp.json()["data"]["defaultDatasetId"]
 
         items_url = (
             f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-            f"?token={APIFY_API_TOKEN}&limit=30"
+            f"?token={APIFY_API_TOKEN}&limit={max_results}"
         )
         items = requests.get(items_url, timeout=30).json()
 
         results = []
         for item in items:
-            for r in item.get("organicResults", []):
-                if len(results) >= max_results:
-                    break
-                results.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("url", ""),
-                    "snippet": r.get("description", "")[:200],
-                    "platform": "Meta Ads",
-                })
+            snapshot = item.get("snapshot", {})
+            if isinstance(snapshot, str):
+                continue
+
+            page_name = item.get("page_name", "") or snapshot.get("page_name", "")
+            body = snapshot.get("body", {})
+            ad_text = body.get("text", "") if isinstance(body, dict) else str(body)
+            cta = snapshot.get("cta_text", "")
+            display_format = snapshot.get("display_format", "")
+            platforms = item.get("publisher_platform", [])
+            link = snapshot.get("link_url", "")
+
+            if not ad_text and not page_name:
+                continue
+
+            results.append({
+                "page_name": page_name,
+                "ad_text": ad_text[:300],
+                "cta": cta,
+                "format": display_format,
+                "platforms": platforms,
+                "link": str(link)[:200] if link else "",
+                "platform": "Meta Ads Library",
+            })
+
         return results[:max_results]
     except Exception as e:
-        print(f"  Meta Ads Scrape Fehler: {e}")
+        print(f"  Meta Ads Library Fehler: {e}")
         return []
 
 
@@ -240,7 +261,10 @@ def generate_video_ideas(research: dict, video_themen: list,
 
     meta_summary = ""
     for m in research.get("meta_ads", [])[:5]:
-        meta_summary += f"- {m['title'][:80]}: {m['snippet'][:100]}\n"
+        page = m.get("page_name", "?")
+        text = m.get("ad_text", "")[:100]
+        fmt = m.get("format", "")
+        meta_summary += f"- {page} ({fmt}): {text}\n"
 
     news_summary = ""
     for n in research.get("news", [])[:5]:
