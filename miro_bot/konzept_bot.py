@@ -129,15 +129,16 @@ def place_concept_on_board(board_id: str, concept: dict, progress_callback=None)
     title = concept.get("title", "Konzept")
 
     # ── Layout config ──
-    col_width = 350          # width of each section column
-    col_gap = 50             # horizontal gap between columns
-    header_h = 70            # section header height
-    sticky_w = 320           # sticky note width
-    sticky_h = 200           # sticky note height (Miro auto-sizes, this is approx)
-    sticky_gap = 30          # vertical gap between stickies
-    title_h = 80             # title bar height
-    title_margin = 40        # gap between title and sections
-    padding = 60             # frame padding around content
+    # NOTE: Miro auto-sizes sticky notes to ~370px tall for short text
+    col_width = 380          # width of each section column
+    col_gap = 60             # horizontal gap between columns
+    header_h = 80            # section header height
+    sticky_w = 340           # sticky note width
+    sticky_h = 400           # sticky note actual height (Miro auto-sizes to ~370)
+    sticky_gap = 50          # vertical gap between stickies
+    title_h = 90             # title bar height
+    title_margin = 60        # gap between title and sections
+    padding = 100            # frame padding around content
 
     cols = min(len(sections), 3)
     rows = (len(sections) + cols - 1) // cols if cols else 1
@@ -149,10 +150,6 @@ def place_concept_on_board(board_id: str, concept: dict, progress_callback=None)
     content_h = title_h + title_margin + rows * (col_content_h + col_gap)
     frame_w = content_w + padding * 2
     frame_h = content_h + padding * 2
-
-    # Frame center (Miro positions frames by center)
-    frame_cx = origin_x + frame_w // 2
-    frame_cy = origin_y + frame_h // 2
 
     # Content top-left corner (for placing items inside)
     content_left = origin_x + padding
@@ -223,7 +220,7 @@ def place_concept_on_board(board_id: str, concept: dict, progress_callback=None)
             sticky = create_sticky_note(
                 board_id,
                 x=col_cx, y=sticky_cy,
-                content=point,
+                content=f"<p>{point}</p>",
                 color=color["sticky"],
                 width=sticky_w,
             )
