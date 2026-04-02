@@ -149,7 +149,50 @@ Kein Markdown, kein Erklärtext — NUR das JSON."""
         if match:
             raw_text = match.group(1)
 
-    return json.loads(raw_text.strip())
+    # Clean up common JSON issues from LLM output
+    raw_text = raw_text.strip()
+
+    # Try parsing as-is first
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fix: remove trailing commas before ] or }
+    cleaned = re.sub(r',\s*([}\]])', r'\1', raw_text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Fix: escape unescaped quotes inside strings
+    # Try to find JSON object in the text
+    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: let Claude fix the JSON
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=_secret("ANTHROPIC_API_KEY"))
+        fix_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": f"Fix this broken JSON and return ONLY valid JSON, nothing else:\n\n{raw_text[:4000]}"}],
+        )
+        fixed = fix_resp.content[0].text.strip()
+        if "```" in fixed:
+            m = re.search(r"```(?:json)?\s*(.*?)```", fixed, re.DOTALL)
+            if m:
+                fixed = m.group(1)
+        return json.loads(fixed.strip())
+    except Exception:
+        pass
+
+    raise RuntimeError(f"Merlins Antwort ist kein valides JSON. Bitte nochmal versuchen.")
 
 
 # Color palette for sections
