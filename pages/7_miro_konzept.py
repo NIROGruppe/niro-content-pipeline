@@ -30,11 +30,15 @@ with c1:
     )
 
 with c2:
-    from miro_bot.konzept_bot import CONCEPT_TYPES
+    CONCEPT_TYPE_OPTIONS = {
+        "grobkonzept": "Grobkonzept — Überblick mit strategischen Eckpfeilern",
+        "feinkonzept": "Feinkonzept — Detailliert mit konkreten Maßnahmen",
+        "reels": "Reels-Konzept — Hooks, Szenen und CTAs",
+    }
     concept_type = st.selectbox(
         "Konzept-Typ",
-        options=list(CONCEPT_TYPES.keys()),
-        format_func=lambda k: f"{CONCEPT_TYPES[k]['label']} — {CONCEPT_TYPES[k]['description'][:50]}",
+        options=list(CONCEPT_TYPE_OPTIONS.keys()),
+        format_func=lambda k: CONCEPT_TYPE_OPTIONS[k],
     )
 
 # Row 2: Customer Profile
@@ -110,7 +114,7 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
                 file_text += uf.read().decode("utf-8", errors="ignore") + "\n\n"
 
     # Step 1: Generate concept via Merlin
-    with st.spinner(f"🧠 Merlin erstellt {CONCEPT_TYPES[concept_type]['label']}..."):
+    with st.spinner(f"🧠 Merlin erstellt {CONCEPT_TYPE_OPTIONS[concept_type].split(' —')[0]}..."):
         try:
             concept = generate_concept(
                 thema=thema,
@@ -145,7 +149,7 @@ if st.button("🚀 Konzept erstellen & auf Board platzieren", use_container_widt
 
         progress.empty()
         st.success(
-            f"✅ {CONCEPT_TYPES[concept_type]['label']} **\"{result['title']}\"** erfolgreich platziert! "
+            f"✅ {CONCEPT_TYPE_OPTIONS[concept_type].split(' —')[0]} **\"{result['title']}\"** erfolgreich platziert! "
             f"({result['items_created']} Elemente, {result['sections']} Abschnitte)"
         )
         st.markdown(
